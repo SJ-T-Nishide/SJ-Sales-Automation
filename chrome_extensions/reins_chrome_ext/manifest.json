@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "REINS物件抽出",
+  "version": "1.0",
+  "description": "REINS物件一覧から物件データを抽出し、TSV形式でスプレッドシートに貼り付けられます。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "clipboardWrite",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://system.reins.jp/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://system.reins.jp/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "REINS物件抽出",
+    "default_icon": {
+      "48": "icon48.png"
+    }
+  },
+  "icons": {
+    "48": "icon48.png"
+  }
+}
