@@ -1,0 +1,12 @@
+# 認証情報・秘密鍵（絶対にコミットしない）
+.env
+airdna-auth.json
+
+# 依存パッケージ（npm install で再生成）
+node_modules/
+
+# 一時ダウンロードフォルダ
+airdna_temp/
+
+# ダウンロードされたCSV
+*.csv

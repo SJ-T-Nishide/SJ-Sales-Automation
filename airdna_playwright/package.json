@@ -1,0 +1,14 @@
+{
+  "name": "airdna-playwright",
+  "version": "1.0.0",
+  "description": "AirDNA Export 自動化スクリプト",
+  "main": "playwright_airdna.js",
+  "scripts": {
+    "start": "node playwright_airdna.js",
+    "login": "node login-save.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.44.0"
+  }
+}
