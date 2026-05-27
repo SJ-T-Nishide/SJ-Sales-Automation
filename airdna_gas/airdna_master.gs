@@ -125,7 +125,8 @@ function initializeSubmarketMaster() {
     '',                      // last_imported_at
     '',                      // next_due_at
     'pending',               // status
-    s.note                   // note
+    s.note,                  // note
+    ''                       // filter_name（AirDNA My Filters に保存後、手動で入力）
   ]);
 
   sheet.getRange(2, 1, rows.length, MASTER_HEADERS.length).setValues(rows);
