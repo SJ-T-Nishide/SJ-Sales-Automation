@@ -26,15 +26,10 @@ const COL = {
   SIM_DATE:     'AirDNA_SIM実行日時',
 };
 
-// ── メニュー登録 ─────────────────────────────────────────────
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('物件管理')
-    .addItem('詳細SIM作成', 'menuCreateDetailSim')
-    .addToUi();
-}
-
 // ── メニューハンドラ ─────────────────────────────────────────
+// ※ onOpen() は既存ファイルに定義済み。
+//    既存の onOpen() 内に以下の1行を追加してメニュー登録してください:
+//      .addItem('詳細SIM作成', 'menuCreateDetailSim')
 function menuCreateDetailSim() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const row   = sheet.getActiveRange().getRow();
