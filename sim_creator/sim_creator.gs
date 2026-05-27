@@ -95,13 +95,8 @@ function createDetailSim(sheet, rowIndex) {
     mapUrl,
   });
 
-  // 元シートのステータス列を更新
+  // 元シートのSIM実行日時を更新
   const nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
-
-  const detailStatusIdx = colIdx(COL.DETAIL_STATUS);
-  if (detailStatusIdx >= 0) {
-    sheet.getRange(rowIndex, detailStatusIdx + 1).setValue('SIM作成済');
-  }
 
   const simDateIdx = colIdx(COL.SIM_DATE);
   if (simDateIdx >= 0) {
