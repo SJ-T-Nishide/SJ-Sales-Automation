@@ -7,9 +7,11 @@
 //      ※ 時刻未登録の場合はアラーム未生成 → 自動送信なし
 // ============================================================
 
-// 旧バージョンの自動送信残留データをクリア
-chrome.alarms.clear('checkReplies').catch(() => {});
-chrome.storage.local.remove('inboundApoPending').catch(() => {});
+// 旧バージョンの自動送信残留データをクリア（インストール/更新時のみ）
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.clear('checkReplies').catch(() => {});
+  chrome.storage.local.remove('inboundApoPending').catch(() => {});
+});
 
 // ---- GAS API 呼び出し ----
 
@@ -39,9 +41,11 @@ async function callGAS(route, payload = {}, method = 'POST') {
     };
   }
 
-  const res = await fetch(url, options);
+  const res = await fetch(url, { ...options, signal: AbortSignal.timeout(60000) });
   if (!res.ok) throw new Error(`GAS HTTP ${res.status}`);
-  return res.json();
+  const json = await res.json();
+  if (json && json.error) throw new Error(`GAS error: ${json.error}`);
+  return json;
 }
 
 function syncGet(keys) {
@@ -133,7 +137,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name.startsWith('batch_')) {
     const tabs = await chrome.tabs.query({ url: 'https://tokyo-calendar-date.jp/*' });
     for (const tab of tabs) {
-      chrome.tabs.sendMessage(tab.id, { action: 'startBatchSend' }).catch(() => {});
+      chrome.tabs.sendMessage(tab.id, { action: 'startBatchSend' })
+        .catch((e) => console.warn(`[東カレ] startBatchSend送信失敗 tab=${tab.id}: ${e.message}`));
     }
     console.log(`[東カレ] バッチ送信アラーム起動: ${alarm.name}`);
   }

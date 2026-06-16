@@ -1661,6 +1661,7 @@ async function generateReply() {
       mode: 'reply',
       conversationSummary: summary,
     });
+    if (!result) throw new Error('Service Workerから応答がありません');
     if (result.error) throw new Error(result.error);
     renderCandidates(result.candidates);
     await submitToTelegram(result.candidates, 'reply', summary);
@@ -1686,6 +1687,7 @@ async function generateApo() {
       conversationSummary: summary,
       calendarSlots: slots,
     });
+    if (!result) throw new Error('Service Workerから応答がありません');
     if (result.error) throw new Error(result.error);
     renderCandidates(result.candidates);
     await submitToTelegram(result.candidates, 'apo', summary, slots);

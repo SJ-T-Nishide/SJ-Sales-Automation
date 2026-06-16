@@ -30,11 +30,6 @@
     },
     {
       "matches": ["https://tokyo-calendar-date.jp/*"],
-      "js": ["approval.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://tokyo-calendar-date.jp/*"],
       "js": ["injected.js"],
       "run_at": "document_idle",
       "world": "MAIN"
