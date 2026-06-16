@@ -4,13 +4,27 @@
 // ============================================================
 
 // メインエントリーポイント（GASエディタから手動実行）
+// 5分制限で中断した場合、再実行すると続きから再開する
 function importAllLeads() {
   const startTime = Date.now();
   const results = { total: 0, imported: 0, skipped: 0, errors: 0, tabs: [] };
+  const props = PropertiesService.getScriptProperties();
+
+  // チェックポイント読み込み（前回中断した最後の完了タブ）
+  const savedCp = props.getProperty('IMPORT_CHECKPOINT');
+  const checkpoint = savedCp ? JSON.parse(savedCp) : null;
+  let checkpointPassed = !checkpoint;
+  if (checkpoint) {
+    Logger.log('▶ 前回の続きから再開: ' + checkpoint.tabName);
+  }
 
   Logger.log('=== リードインポート開始 ===');
 
+  let timeExceeded = false;
+
   for (const sheetId of SOURCE_SHEETS) {
+    if (timeExceeded) break;
+
     let ss;
     try {
       ss = SpreadsheetApp.openById(sheetId);
@@ -23,9 +37,9 @@ function importAllLeads() {
     Logger.log(`スプレッドシート: ${ss.getName()}`);
 
     for (const sheet of ss.getSheets()) {
-      // タイムアウト防止
       if (Date.now() - startTime > MAX_EXECUTION_MS) {
-        Logger.log('⚠️ 実行時間上限に達しました。残りのタブは次回実行してください。');
+        Logger.log('⚠️ 実行時間上限に達しました。次回実行で続きから再開します。');
+        timeExceeded = true;
         break;
       }
 
@@ -36,13 +50,30 @@ function importAllLeads() {
         continue;
       }
 
+      // チェックポイント以前のタブはスキップ
+      if (!checkpointPassed) {
+        if (sheetId === checkpoint.sheetId && tabName === checkpoint.tabName) {
+          checkpointPassed = true;
+        }
+        Logger.log(`  スキップ（処理済）: ${tabName}`);
+        continue;
+      }
+
       const tabResult = importTab_(sheet, sheetId);
       results.total     += tabResult.total;
       results.imported  += tabResult.imported;
       results.skipped   += tabResult.skipped;
       results.errors    += tabResult.errors;
       results.tabs.push({ name: tabName, ...tabResult });
+
+      // タブ完了ごとにチェックポイント保存
+      props.setProperty('IMPORT_CHECKPOINT', JSON.stringify({ sheetId, tabName }));
     }
+  }
+
+  if (!timeExceeded) {
+    props.deleteProperty('IMPORT_CHECKPOINT');
+    Logger.log('✅ 全タブ完了 — チェックポイントをクリアしました');
   }
 
   Logger.log('=== インポート完了 ===');
@@ -112,16 +143,28 @@ function importTab_(sheet, sheetId) {
   const phoneOnly    = leadsToUpsert.filter(l => !l.email && l.phone);
   const noContact    = leadsToUpsert.filter(l => !l.email && !l.phone);
 
+  // バッチ内重複排除（同一バッチに同じemail/phoneが複数あるとPostgreSQLエラーになる）
+  const withEmailDeduped = deduplicateBy_(withEmail, 'email');
+  // メールUPSERT時に電話ユニーク制約で衝突しないよう、電話重複も排除
+  const phoneSeenInEmail = new Set();
+  const withEmailFinal = withEmailDeduped.filter(l => {
+    if (!l.phone) return true;
+    if (phoneSeenInEmail.has(l.phone)) return false;
+    phoneSeenInEmail.add(l.phone);
+    return true;
+  });
+  const phoneOnlyDeduped = deduplicateBy_(phoneOnly, 'phone');
+
   try {
-    if (withEmail.length > 0) {
-      supabaseBatchUpsert('leads', withEmail, 'email');
-      result.imported += withEmail.length;
-      Logger.log(`  メールあり: ${withEmail.length}件 UPSERT完了`);
+    if (withEmailFinal.length > 0) {
+      supabaseBatchUpsert('leads', withEmailFinal, 'email');
+      result.imported += withEmailFinal.length;
+      Logger.log(`  メールあり: ${withEmailFinal.length}件 UPSERT完了`);
     }
-    if (phoneOnly.length > 0) {
-      supabaseBatchUpsert('leads', phoneOnly, 'phone');
-      result.imported += phoneOnly.length;
-      Logger.log(`  電話のみ: ${phoneOnly.length}件 UPSERT完了`);
+    if (phoneOnlyDeduped.length > 0) {
+      supabaseBatchUpsert('leads', phoneOnlyDeduped, 'phone');
+      result.imported += phoneOnlyDeduped.length;
+      Logger.log(`  電話のみ: ${phoneOnlyDeduped.length}件 UPSERT完了`);
     }
     if (noContact.length > 0) {
       Logger.log(`  ⚠️ メール・電話両方なし: ${noContact.length}件スキップ`);
@@ -207,8 +250,8 @@ function buildLead_(row, colMap, tabName, rowNum, sheetId) {
     data.status = '未対応';
   }
 
-  // 日付フィールドの変換
-  ['last_contacted_at', 'last_marketed_at'].forEach(field => {
+  // 日付フィールドの変換（seminar_dateも含む）
+  ['last_contacted_at', 'last_marketed_at', 'seminar_date'].forEach(field => {
     if (data[field]) {
       const parsed = parseDateValue_(data[field]);
       data[field] = parsed || null;
@@ -268,11 +311,122 @@ function parseDateValue_(value) {
     if (value instanceof Date) {
       d = value;
     } else {
-      d = new Date(value);
+      // "GMT+0900" → "+09:00" に正規化（PostgreSQLが認識できる形式に）
+      const normalized = String(value).replace(/GMT([+-])(\d{2})(\d{2})/i, '$1$2:$3');
+      d = new Date(normalized);
     }
     if (isNaN(d.getTime())) return null;
     return d.toISOString();
   } catch (e) {
     return null;
+  }
+}
+
+// 配列をキーで重複排除（後勝ち）
+function deduplicateBy_(arr, key) {
+  const seen = new Map();
+  arr.forEach(item => { if (item[key]) seen.set(item[key], item); });
+  return Array.from(seen.values());
+}
+
+// ============================================================
+// デバッグ用テスト関数
+// ============================================================
+
+// Supabase接続確認（データ変更なし）
+function testSupabaseConnection() {
+  Logger.log('=== Supabase接続テスト ===');
+  try {
+    const result = supabaseRequest_('GET', 'leads', null, { select: 'id', limit: '1' });
+    Logger.log('✅ 接続OK: ' + (result ? result.length : 0) + '件取得');
+  } catch (e) {
+    Logger.log('❌ 接続エラー: ' + e.message);
+  }
+}
+
+// 最初の有効タブの先頭N行だけでフルパイプラインをテスト
+function testImportSample(maxRows) {
+  maxRows = maxRows || 10;
+  Logger.log('=== サンプルインポートテスト（最大' + maxRows + '行）===');
+
+  let testSheet = null;
+  let testSheetId = null;
+
+  for (const sheetId of SOURCE_SHEETS) {
+    let ss;
+    try {
+      ss = SpreadsheetApp.openById(sheetId);
+    } catch (e) {
+      Logger.log('スキップ（開けない）: ' + sheetId);
+      continue;
+    }
+    for (const sheet of ss.getSheets()) {
+      if (SKIP_TABS.some(s => sheet.getName().includes(s))) continue;
+      testSheet = sheet;
+      testSheetId = sheetId;
+      break;
+    }
+    if (testSheet) break;
+  }
+
+  if (!testSheet) {
+    Logger.log('ERROR: 有効なタブが見つかりません');
+    return;
+  }
+
+  Logger.log('テスト対象: ' + testSheet.getName());
+
+  const headerRowIndex = detectHeaderRow_(testSheet);
+  if (headerRowIndex === -1) {
+    Logger.log('ERROR: ヘッダー行が見つかりません');
+    return;
+  }
+
+  const allValues = testSheet.getDataRange().getValues();
+  const headers = allValues[headerRowIndex].map(h => String(h).trim());
+  const colMap = mapHeaders_(headers);
+  Logger.log('認識列: ' + Object.keys(colMap).map(i => colMap[i]).join(', '));
+
+  const leadsToTest = [];
+  const limit = Math.min(headerRowIndex + 1 + maxRows, allValues.length);
+
+  for (let i = headerRowIndex + 1; i < limit; i++) {
+    const row = allValues[i];
+    if (row.every(cell => cell === '' || cell === null || cell === undefined)) continue;
+    const lead = buildLead_(row, colMap, testSheet.getName(), i + 1, testSheetId);
+    if (lead) leadsToTest.push(lead);
+  }
+
+  if (leadsToTest.length === 0) {
+    Logger.log('⚠️ 有効なリードなし（email/phone 両方空の行のみ）');
+    return;
+  }
+
+  Logger.log('有効リード: ' + leadsToTest.length + '件 / サンプル: ' + JSON.stringify(leadsToTest[0]));
+
+  try {
+    const withEmail    = leadsToTest.filter(l => l.email);
+    const phoneOnly    = leadsToTest.filter(l => !l.email && l.phone);
+    const withEmailDeduped = deduplicateBy_(withEmail, 'email');
+    const phoneSeenInEmail = new Set();
+    const withEmailFinal = withEmailDeduped.filter(l => {
+      if (!l.phone) return true;
+      if (phoneSeenInEmail.has(l.phone)) return false;
+      phoneSeenInEmail.add(l.phone);
+      return true;
+    });
+    const phoneOnlyDeduped = deduplicateBy_(phoneOnly, 'phone');
+
+    if (withEmailFinal.length > 0) {
+      supabaseBatchUpsert('leads', withEmailFinal, 'email');
+      Logger.log('✅ メールあり: ' + withEmailFinal.length + '件 UPSERT成功');
+    }
+    if (phoneOnlyDeduped.length > 0) {
+      supabaseBatchUpsert('leads', phoneOnlyDeduped, 'phone');
+      Logger.log('✅ 電話のみ: ' + phoneOnlyDeduped.length + '件 UPSERT成功');
+    }
+    Logger.log('=== テスト完了 ===');
+  } catch (e) {
+    Logger.log('❌ エラー: ' + e.message);
   }
 }

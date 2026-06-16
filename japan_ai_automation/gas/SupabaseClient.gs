@@ -5,11 +5,11 @@
 function getSupabaseConfig_() {
   const props = PropertiesService.getScriptProperties();
   const url = props.getProperty('SUPABASE_URL');
-  const key = props.getProperty('SUPABASE_SERVICE_KEY');
+  const key = props.getProperty('SUPABASE_ANON_KEY');
   if (!url || !key) {
     throw new Error(
       'スクリプトプロパティが未設定です。\n' +
-      'SUPABASE_URL と SUPABASE_SERVICE_KEY を設定してください。\n' +
+      'SUPABASE_URL と SUPABASE_ANON_KEY を設定してください。\n' +
       '設定方法: GASエディタ → プロジェクトの設定 → スクリプトプロパティ'
     );
   }
@@ -31,6 +31,8 @@ function supabaseRequest_(method, table, body, queryParams) {
     'apikey': key,
     'Authorization': `Bearer ${key}`,
     'Content-Type': 'application/json',
+    'User-Agent': 'GAS-Server/1.0',
+    'X-Client-Info': 'gas-server/1.0',
   };
 
   if (method === 'POST') {
@@ -86,6 +88,8 @@ function supabaseUpsert(table, data, onConflictCols) {
       'Authorization': `Bearer ${key}`,
       'Content-Type': 'application/json',
       'Prefer': 'resolution=merge-duplicates,return=minimal',
+      'User-Agent': 'GAS-Server/1.0',
+      'X-Client-Info': 'gas-server/1.0',
     },
     payload: JSON.stringify(data),
     muteHttpExceptions: true,
@@ -116,12 +120,30 @@ function supabaseBatchUpsert(table, rows, onConflictCols) {
 
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);
-    supabaseUpsert(table, batch, onConflictCols);
-    Logger.log(`  → バッチ ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length}件 送信完了`);
-
-    // レートリミット対策
-    if (i + BATCH_SIZE < rows.length) {
-      Utilities.sleep(200);
+    try {
+      supabaseUpsert(table, batch, onConflictCols);
+      Logger.log(`  → バッチ ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length}件 送信完了`);
+    } catch (e) {
+      if (e.message && e.message.includes('"23505"') && e.message.includes('phone')) {
+        // 電話重複エラー: 個別処理に切替え、phone競合時はphoneを除いて再試行
+        let ok = 0;
+        for (const row of batch) {
+          try {
+            supabaseUpsert(table, [row], onConflictCols);
+            ok++;
+          } catch (e2) {
+            if (e2.message && e2.message.includes('"23505"') && e2.message.includes('phone') && row.phone) {
+              const r2 = Object.assign({}, row);
+              delete r2.phone;
+              try { supabaseUpsert(table, [r2], onConflictCols); ok++; } catch (_) {}
+            }
+          }
+        }
+        Logger.log(`  → バッチ ${Math.floor(i / BATCH_SIZE) + 1}: ${ok}/${batch.length}件（一部電話省略）`);
+      } else {
+        throw e;
+      }
     }
+    if (i + BATCH_SIZE < rows.length) Utilities.sleep(200);
   }
 }
