@@ -1229,7 +1229,7 @@ async function injectMatchSelector() {
 
   // パネルがなければ作成
   let panel = document.getElementById('hg-match-panel');
-  let countEl, sendBtn, stopBtn;
+  let countEl, genBtn, sendBtn, stopBtn;
 
   if (!panel) {
     panel = document.createElement('div');
@@ -1244,6 +1244,14 @@ async function injectMatchSelector() {
     countEl = document.createElement('span');
     countEl.id = 'hg-match-count';
     countEl.style.cssText = 'font-size:12px;flex:1;';
+
+    genBtn = document.createElement('button');
+    genBtn.id = 'hg-match-gen';
+    genBtn.textContent = '📝 生成';
+    genBtn.style.cssText = [
+      'background:#2980b9', 'color:#fff', 'border:none',
+      'border-radius:6px', 'padding:6px 10px', 'font-size:12px', 'cursor:pointer',
+    ].join(';');
 
     sendBtn = document.createElement('button');
     sendBtn.id = 'hg-match-send';
@@ -1262,9 +1270,41 @@ async function injectMatchSelector() {
     ].join(';');
 
     panel.appendChild(countEl);
+    panel.appendChild(genBtn);
     panel.appendChild(sendBtn);
     panel.appendChild(stopBtn);
     document.body.appendChild(panel);
+
+    genBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const { selectedForBatch: sel = [] } = await localGet('selectedForBatch');
+      if (sel.length === 0) {
+        showNotif('候補生成: チェックボックスで対象を選択してください', '#e67e22', 3000);
+        return;
+      }
+
+      const job = sel.map((path) => {
+        let name = path.split('/').pop();
+        document.querySelectorAll('.hg-match-cb').forEach((cb) => {
+          if (cb.dataset.chatPath === path) name = cb.dataset.name || name;
+        });
+        return { path, name, conversationType: 'first', profile: '', lastMessage: '' };
+      });
+
+      const { activePatternId = '' } = await localGet('activePatternId');
+
+      let calendarSlots = [];
+      try {
+        const calRes = await chrome.runtime.sendMessage({ action: 'fetchCalendarSlots' });
+        if (Array.isArray(calRes)) calendarSlots = calRes;
+        else if (calRes?.slots) calendarSlots = calRes.slots;
+      } catch (_) {}
+
+      await localSet({ candidatesJob: { job, calendarSlots, patternId: activePatternId } });
+      chrome.tabs.create({ url: chrome.runtime.getURL('candidates.html') });
+    });
 
     sendBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1285,6 +1325,7 @@ async function injectMatchSelector() {
     });
   } else {
     countEl = document.getElementById('hg-match-count');
+    genBtn   = document.getElementById('hg-match-gen');
     sendBtn  = document.getElementById('hg-match-send');
     stopBtn  = document.getElementById('hg-match-stop');
   }
@@ -1389,7 +1430,9 @@ async function injectMatchSelector() {
   // カウント・送信ボタン更新
   const checkedCount = document.querySelectorAll('.hg-match-cb:checked').length;
   countEl.textContent = checkedCount > 0 ? `${checkedCount}件選択中` : `マッチ ${allMatchLis.length}件`;
-  if (sendBtn) sendBtn.style.display = document.querySelector('.hg-match-cb') ? '' : 'none';
+  const hasCbs = !!document.querySelector('.hg-match-cb');
+  if (genBtn)  genBtn.style.display  = hasCbs ? '' : 'none';
+  if (sendBtn) sendBtn.style.display = hasCbs ? '' : 'none';
 }
 
 // ============================================================
@@ -1552,6 +1595,22 @@ async function sendFirstMessage() {
     ]);
     const pattern = patterns.find((p) => p.id === activePatternId) || {};
     const chatPath = location.pathname.replace(/\/$/, '');
+
+    // 📝生成フロー: 事前承認済みテキストがあればClaudeを呼ばずにそのまま送信
+    const { batchQueue: bq0 = [] } = await localGet('batchQueue');
+    const preApproved = bq0.find((q) => q.path === chatPath);
+    if (preApproved?.approvedText) {
+      const sent = await sendMessageText(preApproved.approvedText);
+      if (sent) {
+        const opCount = countOpponentMessages();
+        await csUpdate(chatPath, { stage: 1, replyCount: opCount, patternId: activePatternId, active: true, isInbound: false });
+        setStatus('事前承認メッセージを送信しました ✓', '#27ae60');
+      } else {
+        setStatus('送信失敗（Console確認）', '#e74c3c');
+      }
+      await batchAdvance();
+      return;
+    }
 
     // スカウト送信済みのユーザーか確認（インバウンドと誤認防止）
     // scoutSentUserIds は profile_open(ID) のプロフィールIDで保存 → DOM から取得して照合
