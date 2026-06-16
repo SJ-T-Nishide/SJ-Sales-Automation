@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "東カレデート自動化",
+  "version": "1.0.0",
+  "description": "自動いいね・返信候補生成・アポ打診（GAS経由Claude）",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://tokyo-calendar-date.jp/*",
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://tokyo-calendar-date.jp/*"],
+      "js": ["guard.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://tokyo-calendar-date.jp/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://tokyo-calendar-date.jp/*"],
+      "js": ["approval.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://tokyo-calendar-date.jp/*"],
+      "js": ["injected.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "東カレ自動化"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["candidates.html", "candidates.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

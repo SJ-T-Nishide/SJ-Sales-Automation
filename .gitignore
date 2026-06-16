@@ -13,6 +13,7 @@ scripts/.env
 !package.json
 !package-lock.json
 !**/appsscript.json
+!higashare-ext/manifest.json
 
 # APIキー
 *_api_key*

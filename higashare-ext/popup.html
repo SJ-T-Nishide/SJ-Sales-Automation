@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>東カレ自動化</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>東カレデート自動化</h1>
+
+  <!-- ワンクリック起動 -->
+  <button id="openMobileBtn" class="btn-open-mobile">📱 東カレをモバイルで開く</button>
+
+  <!-- モバイル表示切替（現在のタブ用） -->
+  <section class="mobile-section">
+    <button id="mobileToggleBtn" class="btn-mobile">📱 モバイル表示 OFF</button>
+    <div id="mobileStatus" style="font-size:11px;color:#e74c3c;margin-top:4px;min-height:14px;"></div>
+  </section>
+
+  <!-- いいね操作 -->
+  <section class="like-section">
+    <div class="like-controls">
+      <button id="startLikeBtn" class="btn-start">▶ いいね開始</button>
+      <button id="stopLikeBtn"  class="btn-stop" disabled>⏹ 停止</button>
+    </div>
+    <div id="likeStatus" class="like-status"></div>
+  </section>
+
+  <!-- 足跡モード -->
+  <section class="like-section">
+    <div class="like-controls">
+      <button id="startFootprintBtn" class="btn-start">👣 足跡開始</button>
+      <button id="stopFootprintBtn"  class="btn-stop" disabled>⏹ 足跡停止</button>
+    </div>
+    <div id="footprintStatus" class="like-status"></div>
+  </section>
+
+  <!-- 非マッチ一斉送信 -->
+  <section class="like-section">
+    <div class="like-controls">
+      <button id="startScoutBtn" class="btn-start">⚡ 非マッチ送信開始</button>
+      <button id="stopScoutBtn"  class="btn-stop" disabled>⏹ 停止</button>
+    </div>
+    <div id="scoutStatus" class="like-status"></div>
+  </section>
+
+  <hr>
+
+  <!-- コンバージョン計測 -->
+  <section class="stats-section">
+    <div class="stats-header">
+      <span class="section-title">計測結果</span>
+      <div class="pattern-controls">
+        <select id="patternSelect"></select>
+        <button id="addPatternBtn" title="パターン追加">＋</button>
+      </div>
+    </div>
+
+    <div class="funnel">
+      <div class="funnel-step">
+        <div class="funnel-num" id="statLikes">0</div>
+        <div class="funnel-label">いいね</div>
+      </div>
+      <div class="funnel-arrow">→</div>
+      <div class="funnel-step">
+        <div class="funnel-num" id="statMatches">0</div>
+        <div class="funnel-label">マッチ</div>
+        <div class="funnel-rate" id="rateMatch">-</div>
+      </div>
+      <div class="funnel-arrow">→</div>
+      <div class="funnel-step">
+        <div class="funnel-num" id="statApos">0</div>
+        <div class="funnel-label">アポ</div>
+        <div class="funnel-rate" id="rateApo">-</div>
+      </div>
+    </div>
+
+    <div class="stats-actions">
+      <button id="resetStatsBtn" class="btn-ghost">今日のみリセット</button>
+      <button id="deletePatternBtn" class="btn-ghost btn-danger">パターン削除</button>
+    </div>
+  </section>
+
+  <hr>
+
+  <!-- シート連携・分析 -->
+  <section class="sheet-section">
+    <div class="sheet-row">
+      <button class="btn-sheet" id="syncSheetBtn">📊 シートに記録</button>
+      <button class="btn-sheet btn-analyze" id="openAnalysisBtn">🤖 AI分析・提案</button>
+    </div>
+    <div class="sheet-row" style="margin-top:6px;">
+      <button class="btn-sheet" id="openScheduleBtn">📅 空き日程を登録</button>
+    </div>
+    <div id="syncMsg"></div>
+  </section>
+
+  <hr>
+
+  <!-- 詳細設定 -->
+  <details id="settingsSection">
+    <summary>詳細設定</summary>
+
+    <div class="section-title">GAS連携</div>
+    <label>GAS Web App URL
+      <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    </label>
+    <label>GAS Secret Token
+      <input type="password" id="gasToken" placeholder="32文字以上の秘密トークン">
+    </label>
+
+    <div class="section-title">現在のパターン設定</div>
+    <label>パターン名<input type="text" id="patternName" placeholder="パターンA"></label>
+    <label>ペルソナ（Claudeへの指示文）
+      <textarea id="persona" rows="3" placeholder="例：32歳会社員、趣味はゴルフ。タメ口で自然に話す。"></textarea>
+    </label>
+    <label>話し方スタイル<input type="text" id="style" placeholder="タメ口、絵文字なし、短文"></label>
+
+    <div class="section-title">いいね設定</div>
+    <label>1回あたりの最大いいね数<input type="number" id="maxLikesPerRun" value="30" min="1" max="100"></label>
+    <label>1日あたりの最大いいね数<input type="number" id="maxLikesDaily" value="50" min="1" max="200"></label>
+
+    <div class="section-title">いいねフィルター</div>
+    <label>除外年齢（例: 18-22, 45-99）
+      <input type="text" id="excludeAge" placeholder="例: 18-22, 45-99">
+    </label>
+    <label>除外職業（複数選択: Ctrl+クリック）
+      <select id="excludeJobs" multiple size="6">
+        <option>経営者・役員(上場企業)</option>
+        <option>経営者・役員(社員100人以上)</option>
+        <option>経営者・役員</option>
+        <option>医師(開業医)</option>
+        <option>国家公務員(Ⅰ種)</option>
+        <option>上場企業(東証プライム)</option>
+        <option>上場企業</option>
+        <option>投資家</option>
+        <option>医師</option>
+        <option>歯科医師</option>
+        <option>歯科衛生士</option>
+        <option>弁護士</option>
+        <option>公認会計士</option>
+        <option>税理士</option>
+        <option>パイロット</option>
+        <option>客室乗務員</option>
+        <option>芸能・モデル</option>
+        <option>アナウンサー</option>
+        <option>大手企業</option>
+        <option>地方公務員</option>
+        <option>自衛隊</option>
+        <option>マスコミ・広告</option>
+        <option>クリエイター</option>
+        <option>IT関連</option>
+        <option>建築・インテリア</option>
+        <option>講師・教師</option>
+        <option>スポーツ選手</option>
+        <option>イベントコンパニオン</option>
+        <option>受付</option>
+        <option>秘書</option>
+        <option>アパレル・販売</option>
+        <option>エステティシャン</option>
+        <option>理容師・美容師</option>
+        <option>薬剤師</option>
+        <option>看護師</option>
+        <option>介護士</option>
+        <option>調理師・栄養士</option>
+        <option>保育士</option>
+        <option>ブライダル</option>
+        <option>事務</option>
+        <option>会社員</option>
+        <option>学生</option>
+        <option>その他</option>
+      </select>
+    </label>
+
+    <div class="section-title">自動メッセージ プロンプト（マッチ後）</div>
+    <details style="margin:4px 0 8px;font-size:11px;color:#555;background:#f8f9fa;border-radius:6px;padding:6px 8px;">
+      <summary style="cursor:pointer;font-weight:bold;color:#2c3e50;">📋 自動送信フロー（クリックで確認）</summary>
+      <div style="margin-top:6px;line-height:1.7;">
+        <b>【こちらから先に送る場合】</b><br>
+        ① 初回メッセージ → 相手の返信 → ② 2回目 → 返信N回 → ③ アポ打診<br><br>
+        <b>【相手から先にメッセージが届いている場合】</b><br>
+        ① 返信（インバウンド用プロンプト）→ <b>3分後に自動でアポ打診（③のプロンプト使用）</b>
+      </div>
+    </details>
+    <label>① 初回メッセージ【こちらから送る場合】（複数バリエーションは --- で区切る）
+      <textarea id="msg1Template" rows="4" placeholder="バリエーション1のプロンプト&#10;---&#10;バリエーション2のプロンプト"></textarea>
+    </label>
+    <label>① 初回メッセージ【相手から先にメッセージが届いている場合】
+      <textarea id="msg1InboundTemplate" rows="3" placeholder="例: 相手から届いたメッセージに自然に反応しながら、プロフィールへの興味や共通点に触れて返信してください。3〜4文。タメ口。"></textarea>
+    </label>
+    <label>② 2回目メッセージ（相手から最初の返信後）
+      <textarea id="msg2Template" rows="3" placeholder="例: 相手の返信に自然に反応しつつ、相手のことをもっと知りたいという気持ちを伝える返信を書いてください。2〜3文。"></textarea>
+    </label>
+    <label>③ アポ打診【こちらから先に送った場合】1通目（[名前]で名前置換）
+      <textarea id="apoMsg1Template" rows="3" placeholder="[名前]ちゃん、覚えました。&#10;&#10;うれしいです！&#10;&#10;ちなみに見た目だけじゃなくて、上手く言えないんですが纏ってる雰囲気がすごく好きです笑"></textarea>
+    </label>
+    <label>③ アポ打診【こちらから先に送った場合】2通目（[名前]で名前置換）
+      <textarea id="apoMsg2Template" rows="4" placeholder="早いとは思うんですが、会ったことない人とメッセージするのが苦手で。&#10;良かったら近いうちにご飯いきませんか？&#10;&#10;[名前]ちゃん、すごく会ってみたいです。&#10;&#10;もちろん抵抗があったらカフェとか電話とかでも大丈夫ですので！&#10;&#10;返事待ってます。"></textarea>
+    </label>
+    <label>③ アポ打診【相手から先にメッセージが届いていた場合】（[名前]で名前置換）
+      <textarea id="inboundApoTemplate" rows="4" placeholder="早いとは思うんですが、会ったことない人とメッセージするのが苦手で。&#10;良かったら近いうちにご飯いきませんか？&#10;&#10;[名前]ちゃん、雰囲気がすごく好きで会ってみたいです。&#10;&#10;もちろん抵抗があったらカフェとか電話とかでも大丈夫ですので！&#10;&#10;返事待ってます。"></textarea>
+    </label>
+
+    <div class="section-title">アポ承認後 返信テンプレート</div>
+    <div style="font-size:11px;color:#888;margin-bottom:6px;">※ 日程候補は空き日程登録から自動挿入。LINE URLは下欄から。<br>※ Part2に <b>{slot_header}</b> と書くと、空き日程ありの場合のみ「このあたり空いてます！」を自動挿入（なし時は空欄）。</div>
+
+    <label>【ランチ/ディナー承認】Part1（日程の前に送るテキスト）
+      <textarea id="apoMealPart1" rows="2" placeholder="うれしいです！是非行きましょう。&#10;楽しみ！"></textarea>
+    </label>
+    <label>【ランチ/ディナー承認】Part2（LINE誘導テキスト）
+      <textarea id="apoMealPart2" rows="3" placeholder="{slot_header}よかったらLINEで店決めたり予定たてませんか？&#10;ラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ！"></textarea>
+    </label>
+
+    <label>【カフェ/お茶承認】Part1
+      <textarea id="apoCafePart1" rows="2" placeholder="うれしいです！是非行きましょう。&#10;楽しみ！"></textarea>
+    </label>
+    <label>【カフェ/お茶承認】Part2（LINE誘導テキスト）
+      <textarea id="apoCafePart2" rows="3" placeholder="{slot_header}よかったらLINEで店決めたり予定たてませんか？&#10;ラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ。"></textarea>
+    </label>
+
+    <label>【電話承認】Part1
+      <textarea id="apoPhonePart1" rows="2" placeholder="電話ありです！是非しましょう。"></textarea>
+    </label>
+    <label>【電話承認】Part2（LINE誘導テキスト）
+      <textarea id="apoPhonePart2" rows="3" placeholder="{slot_header}LINE電話でもいいですか？&#10;これLINEの友達追加のやつです。&#10;&#10;このままが良ければそれでもOKです！"></textarea>
+    </label>
+
+    <label>LINE招待URL（各ケースのPart2末尾に自動挿入）
+      <input type="text" id="lineTemplate" placeholder="https://line.me/ti/p/xxxxx">
+    </label>
+    <label>アポ打診まで（相手の返信が何回来たら③を送るか）
+      <input type="number" id="apoTriggerCount" value="3" min="1" max="20">
+    </label>
+
+    <div class="section-title">非マッチ送信設定</div>
+    <label>メッセージテンプレート（複数バリエーションは --- で区切る）
+      <textarea id="scoutMsgTemplate" rows="4" placeholder="バリエーション1のテキスト&#10;---&#10;バリエーション2のテキスト"></textarea>
+    </label>
+    <label>1回あたりの最大送信数<input type="number" id="maxScoutPerRun" value="10" min="1" max="50"></label>
+    <label>1日あたりの最大送信数<input type="number" id="maxScoutDaily" value="20" min="1" max="100"></label>
+
+    <div class="section-title">一斉送信 自動スケジュール</div>
+    <div style="font-size:12px;color:#888;margin:4px 0 6px;">送信時刻（複数設定可・0件でスケジュールなし）<br>※ 初回送信・返信・アポ打診すべてに適用</div>
+    <div id="batchTimesContainer"></div>
+    <button type="button" id="addBatchTimeBtn" style="margin:4px 0 2px;padding:4px 12px;font-size:12px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">＋ 時刻を追加</button>
+    <div style="display:flex;gap:6px;margin:6px 0 2px;">
+      <button type="button" id="triggerBatchNowBtn" style="padding:4px 12px;font-size:12px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">⚡ 今すぐ一斉送信を起動</button>
+      <button type="button" id="stopBatchNowBtn" style="padding:4px 12px;font-size:12px;background:#7f8c8d;color:#fff;border:none;border-radius:4px;cursor:pointer;">⏹ 停止</button>
+    </div>
+    <div style="font-size:11px;color:#aaa;margin-top:4px;">※ 設定した時刻に東カレを開いていると自動で初回送信が始まります</div>
+
+    <button id="saveBtn">保存</button>
+    <span id="saveMsg"></span>
+  </details>
+
+  <script src="popup.js"></script>
+</body>
+</html>

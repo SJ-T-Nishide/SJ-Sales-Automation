@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>メッセージ生成 — 東カレ自動化</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117; color: #e0e0e0;
+      font-family: -apple-system, sans-serif; font-size: 13px;
+      min-height: 100vh;
+    }
+    header {
+      position: sticky; top: 0; background: #1a1a2e; z-index: 100;
+      padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.4);
+    }
+    header h1 { font-size: 15px; flex: 1; }
+    #status-bar { font-size: 11px; color: #888; }
+    #content { padding: 12px; max-width: 640px; margin: 0 auto; }
+    .card {
+      background: #16213e; border-radius: 12px;
+      padding: 14px; margin-bottom: 14px;
+    }
+    .card-name {
+      font-size: 14px; font-weight: bold; margin-bottom: 10px; color: #e0e0e0;
+    }
+    .card-status { color: #888; font-size: 12px; }
+    .section-sep {
+      font-size: 11px; color: #888;
+      margin: 10px 0 6px;
+      border-top: 1px solid #2d2d4a; padding-top: 8px;
+    }
+    .cand-label { font-size: 10px; color: #555; margin-bottom: 2px; }
+    .cand-ta {
+      width: 100%; background: #0d1117; color: #e0e0e0;
+      border: 1px solid #2d3748; border-radius: 6px;
+      padding: 8px; font-size: 12px; min-height: 64px; resize: vertical;
+      line-height: 1.5; font-family: inherit;
+    }
+    .cand-block { margin-bottom: 8px; }
+    .cand-btn-row {
+      display: flex; gap: 4px; margin-bottom: 6px;
+    }
+    .cand-sel-btn {
+      flex: 1; background: #2d3748; color: #888; border: 1px solid #3d4758;
+      border-radius: 6px; padding: 6px 4px; font-size: 11px; cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .cand-sel-btn.active {
+      background: #1a5276; color: #fff; border-color: #2980b9;
+    }
+    .queue-btn {
+      width: 100%; color: #fff; border: none;
+      border-radius: 8px; padding: 10px; font-size: 13px; font-weight: bold;
+      cursor: pointer; margin-top: 6px;
+    }
+    .queue-btn:hover { filter: brightness(1.15); }
+    .queued-msg {
+      display: none; color: #27ae60; text-align: center;
+      padding: 8px; font-size: 12px; font-weight: bold;
+    }
+    #footer {
+      display: none; position: sticky; bottom: 0;
+      background: #1a1a2e; padding: 12px 16px;
+      box-shadow: 0 -2px 8px rgba(0,0,0,.4);
+    }
+    #start-btn {
+      width: 100%; background: #e74c3c; color: #fff; border: none;
+      border-radius: 10px; padding: 14px; font-size: 15px; font-weight: bold;
+      cursor: pointer;
+    }
+    #start-btn:hover { background: #c0392b; }
+    .info-section {
+      margin-bottom: 8px; border: 1px solid #2d2d4a; border-radius: 8px;
+      overflow: hidden;
+    }
+    .info-header {
+      background: #1e2a3a; padding: 7px 10px; font-size: 11px;
+      color: #888; user-select: none;
+    }
+    .info-header:hover { background: #253040; color: #aaa; }
+    .info-body {
+      padding: 8px 10px; font-size: 11px; color: #aaa;
+      white-space: pre-wrap; word-break: break-all;
+      background: #0f1923; line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📝 メッセージ生成</h1>
+    <span id="status-bar">読み込み中...</span>
+  </header>
+  <div id="content"></div>
+  <div id="footer">
+    <button id="start-btn">💌 送信開始</button>
+  </div>
+  <script src="candidates.js"></script>
+</body>
+</html>
