@@ -24,6 +24,10 @@ clasp update-deployment <deploymentId> --description "vX.X 説明"
 | `higashare-ext/gas/` | `1NFCdcKx7PNiV7XuKmRp1R2hUETNHwxKN43OzSj_rmX8qHF-MEN-GW6uT` |
 | `plaud_ai_app/` | `18X_Y8SMmRO5EeX6LKsN564XukP1VXeYcumgX5FBA-2gjh3IAB3FT2NHz` |
 | `calendar_sync/` | `11tGiSSbKpbP2J2Ht3eLg1R54IJ8qhtA7BTQYoEaUpkvHylP4HCH_g_3T` |
+| `ai_signal_system/gas/` | `1TLm7a-kbUtUQ0Rz_T6-DGVY7Wy5aGdsw5BUbpqPIwVOWrmo1KlY3B18D` |
+| `japan_ai_automation/gas/` | `1K9weAGh4_cUlzj5YQ0TuneIybr_2mdARmpcS0r_uBkq4hprfzVpaH1no` |
+
+> `higashare-ext/` は `C:\Users\tnish\higashare-ext\` から移動済み（2026-06-04）。元フォルダは動作確認後に削除予定。
 
 ### 機密ファイルは絶対に編集しない
 - `reins_tool/config.ini` — REINS認証情報
@@ -57,6 +61,8 @@ plaud_ai_app/         # 本番稼働中。GAS。Plaud文字起こし→Claude AP
 ai_signal_system/     # 開発中 Phase 2。経営シグナル朝レポートシステム
 scripts/              # Python。朝レポート手動生成スクリプト
 docs/                 # 朝レポートシステム設計書群
+higashare-ext/        # 東カレデート自動化。Chrome拡張+GAS。Chrome審査待ち
+higashare-auto/       # 東カレデート自動化。Node.js+Playwright。自律実行型
 ```
 
 ## 技術スタック別ルール
