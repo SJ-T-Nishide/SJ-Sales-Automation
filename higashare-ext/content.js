@@ -1303,7 +1303,7 @@ async function injectMatchSelector() {
       } catch (_) {}
 
       await localSet({ candidatesJob: { job, calendarSlots, patternId: activePatternId } });
-      chrome.tabs.create({ url: chrome.runtime.getURL('candidates.html') });
+      chrome.runtime.sendMessage({ action: 'openCandidates' });
     });
 
     sendBtn.addEventListener('click', async (e) => {
@@ -1558,10 +1558,13 @@ async function handleScheduledBatchSend() {
     localSet({ batchQueue: firstQueue }),
   ]);
 
-  if (replyPaths.length > 0) {
-    location.href = replyPaths[0];
+  const targetPath = replyPaths.length > 0 ? replyPaths[0] : firstQueue[0].path;
+  // 友達一覧に該当リンクがあればクリック（Turbo SPA対応）、なければ直接遷移
+  const targetLink = document.querySelector(`a[href="${targetPath}"], a[href="https://tokyo-calendar-date.jp${targetPath}"]`);
+  if (targetLink) {
+    targetLink.click();
   } else {
-    location.href = firstQueue[0].path;
+    location.href = 'https://tokyo-calendar-date.jp' + targetPath;
   }
 }
 
@@ -2047,6 +2050,25 @@ async function init() {
   if (isListPage()) setTimeout(injectPriorityScores, 1000);
   if (isFriendIndexPage()) {
     injectMatchSelector();
+  }
+
+  // バッチ処理中に想定外ページ（/search/list など）へ飛んでしまった場合、
+  // キューが残っていれば正しいチャットへ自動リダイレクト
+  if (!isConversationPage() && !isFriendIndexPage()) {
+    const [{ batchQueue: bqInit = [] }, { checkQueue: cqInit = [] }] = await Promise.all([
+      localGet('batchQueue'),
+      localGet('checkQueue'),
+    ]);
+    if (bqInit.length > 0) {
+      console.log('[東カレ] 想定外ページ: batchQueue残存 → リダイレクト', bqInit[0].path);
+      location.href = 'https://tokyo-calendar-date.jp' + bqInit[0].path;
+      return;
+    }
+    if (cqInit.length > 0) {
+      console.log('[東カレ] 想定外ページ: checkQueue残存 → リダイレクト', cqInit[0]);
+      location.href = 'https://tokyo-calendar-date.jp' + cqInit[0];
+      return;
+    }
   }
 
   if (isConversationPage()) {

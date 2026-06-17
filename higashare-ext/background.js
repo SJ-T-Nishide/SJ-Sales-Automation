@@ -95,6 +95,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       refreshBatchAlarms().then(() => sendResponse({ ok: true })).catch((e) => sendResponse({ error: e.message }));
       return true;
 
+    case 'openCandidates':
+      chrome.tabs.create({ url: chrome.runtime.getURL('candidates.html') })
+        .then(() => sendResponse({ ok: true })).catch((e) => sendResponse({ error: e.message }));
+      return true;
+
     case 'saveKnowledge':
       callGAS('saveKnowledge', message.payload)
         .then(sendResponse).catch((e) => sendResponse({ error: e.message }));
