@@ -1558,7 +1558,9 @@ async function handleScheduledBatchSend() {
     localSet({ batchQueue: firstQueue }),
   ]);
 
-  const targetPath = replyPaths.length > 0 ? replyPaths[0] : firstQueue[0].path;
+  // firstQueueがある場合は先に処理（ユーザーが明示的にチェックした相手を優先）
+  // replyPaths（追跡中の既存会話）はbatchQueue完了後にadvanceCheckQueueが処理する
+  const targetPath = firstQueue.length > 0 ? firstQueue[0].path : replyPaths[0];
   const targetUrl = 'https://tokyo-calendar-date.jp' + targetPath;
   console.log('[東カレ] 一斉送信: 移動先=', targetUrl, '(replyPaths:', replyPaths.length, 'firstQueue:', firstQueue.length, ')');
 
@@ -1566,7 +1568,6 @@ async function handleScheduledBatchSend() {
   if (window.Turbo?.visit) {
     window.Turbo.visit(targetUrl);
   } else {
-    // DOM上にリンクがあればクリック、なければフォールバック
     const targetLink = document.querySelector(`a[href="${targetPath}"], a[href="${targetUrl}"]`);
     if (targetLink) {
       targetLink.click();
@@ -1588,7 +1589,14 @@ async function batchAdvance() {
     setTimeout(() => { location.href = remaining[0].path; }, 2000);
   } else {
     await localSet({ selectedForBatch: [] });
-    setStatus('一括送信完了 ✓', '#27ae60');
+    // batchQueue完了後、checkQueue（追跡中の既存会話）が残っていれば継続
+    const { checkQueue: cq = [] } = await localGet('checkQueue');
+    if (cq.length > 0) {
+      setStatus(`一括送信完了 ✓ → 追跡中${cq.length}件を処理します`, '#27ae60');
+      setTimeout(() => { location.href = 'https://tokyo-calendar-date.jp' + cq[0]; }, 2000);
+    } else {
+      setStatus('一括送信完了 ✓', '#27ae60');
+    }
   }
 }
 

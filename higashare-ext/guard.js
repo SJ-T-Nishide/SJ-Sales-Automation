@@ -6,6 +6,7 @@ const HG_SEL = '#hg-match-panel, #hg-send-now, #hg-float-stop, #hg-reply-panel';
 const BTN_SEL = 'button, a, input, label, .hg-track-badge';
 
 ['click', 'mousedown', 'touchstart', 'touchend', 'pointerdown'].forEach(function (type) {
+  const needsPassiveFalse = (type === 'touchstart' || type === 'touchend' || type === 'pointerdown');
   window.addEventListener(type, function (e) {
     const t = e.target;
     if (!t || typeof t.closest !== 'function') return;
@@ -15,5 +16,5 @@ const BTN_SEL = 'button, a, input, label, .hg-track-badge';
     if ((type === 'touchstart' || type === 'pointerdown') && t.closest(BTN_SEL)) {
       e.preventDefault();
     }
-  }, true);
+  }, { capture: true, passive: !needsPassiveFalse });
 });
