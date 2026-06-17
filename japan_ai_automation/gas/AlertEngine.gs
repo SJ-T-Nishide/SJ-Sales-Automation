@@ -29,35 +29,55 @@ function runDailyAlerts() {
       Utilities.sleep(300);
     }
 
-    // ルールの最終実行日時を更新
-    supabasePatch('alert_rules', { last_run_at: new Date().toISOString() }, { id: rule.id });
+    // ルールの最終実行日時を更新（SECURITY DEFINER RPC 経由）
+    markAlertRuleRun_(rule.id);
   }
 
   Logger.log(`\n=== アラート完了: ${totalAlerts}件通知 ===`);
+
+  // v2エンジン: セミナー日時超過の未出席リードに absent イベントを発行
+  try {
+    runAbsentSweep();
+  } catch (e) {
+    Logger.log('runAbsentSweep エラー（無視）: ' + e.message);
+  }
 }
 
 // アラート条件に合致するリードをSupabaseから取得
 function fetchLeadsForAlert_(condition) {
   const { url, key } = getSupabaseConfig_();
 
-  // 基本フィルタ: 配信停止でないリード
-  let endpoint = `${url}/rest/v1/leads?opted_out=eq.false&select=*`;
+  // 基本フィルタ: 配信停止でないリード（必要列のみ取得）
+  const alertCols = 'id,name,phone,email,source,heat,status,stage_key,assigned_to,last_marketed_at,last_contacted_at,next_action_at,created_at';
+  let endpoint = `${url}/rest/v1/leads?opted_out=eq.false&select=${alertCols}`;
 
-  // status_not_in フィルタ
+  // next_action_overdue: サーバー側フィルタ（GAS側評価の前段として件数削減）
+  if (condition.next_action_overdue) {
+    const nowIso = new Date().toISOString();
+    endpoint += `&next_action_at=not.is.null&next_action_at=lt.${encodeURIComponent(nowIso)}`;
+  }
+
+  // status_not_in フィルタ（旧フィールド互換）
   if (condition.status_not_in && condition.status_not_in.length > 0) {
     const statusList = condition.status_not_in.map(s => `"${s}"`).join(',');
-    endpoint += `&status=not.in.(${statusList})`;
+    endpoint += `&status=${encodeURIComponent('not.in.(' + statusList + ')')}`;
+  }
+
+  // stage_key_not_in フィルタ（pipeline_stages キーで除外）
+  if (condition.stage_key_not_in && condition.stage_key_not_in.length > 0) {
+    const stageList = condition.stage_key_not_in.map(s => `"${s}"`).join(',');
+    endpoint += `&stage_key=${encodeURIComponent('not.in.(' + stageList + ')')}`;
   }
 
   // heat_in フィルタ
   if (condition.heat_in && condition.heat_in.length > 0) {
     const heatList = condition.heat_in.join(',');
-    endpoint += `&heat=in.(${heatList})`;
+    endpoint += `&heat=${encodeURIComponent('in.(' + heatList + ')')}`;
   }
 
   // product フィルタ
   if (condition.product) {
-    endpoint += `&product=eq.${encodeURIComponent(condition.product)}`;
+    endpoint += `&product=${encodeURIComponent('eq.' + condition.product)}`;
   }
 
   const props = PropertiesService.getScriptProperties();
@@ -101,6 +121,12 @@ function evaluateTimingCondition_(lead, condition) {
     if (daysSince < condition.days_since_last_contacted) return false;
   }
 
+  // next_action_overdue: true の場合は next_action_at が過去のリードのみ対象
+  if (condition.next_action_overdue) {
+    if (!lead.next_action_at) return false;
+    if (new Date(lead.next_action_at).getTime() > now) return false;
+  }
+
   return true;
 }
 
@@ -116,15 +142,21 @@ function sendSlackAlert_(lead, rule) {
     ? Math.floor((Date.now() - new Date(lead.last_marketed_at).getTime()) / (1000 * 60 * 60 * 24))
     : null;
 
+  const nextActionOverdueDays = lead.next_action_at
+    ? Math.floor((Date.now() - new Date(lead.next_action_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null;
+
   // テンプレート変数を置換
   let message = rule.message_template
-    .replace('{name}',                lead.name          || '（名前不明）')
-    .replace('{phone}',               lead.phone         || '（電話なし）')
-    .replace('{email}',               lead.email         || '（メールなし）')
-    .replace('{source}',              lead.source        || '（流入元不明）')
-    .replace('{heat}',                lead.heat          || 'C')
-    .replace('{status}',              lead.status        || '未対応')
-    .replace('{days_since_marketed}', daysSinceMarketed !== null ? `${daysSinceMarketed}日` : '不明');
+    .replace('{name}',                    lead.name          || '（名前不明）')
+    .replace('{phone}',                   lead.phone         || '（電話なし）')
+    .replace('{email}',                   lead.email         || '（メールなし）')
+    .replace('{source}',                  lead.source        || '（流入元不明）')
+    .replace('{heat}',                    lead.heat          || 'C')
+    .replace('{status}',                  lead.status        || '未対応')
+    .replace('{days_since_marketed}',     daysSinceMarketed !== null ? `${daysSinceMarketed}日` : '不明')
+    .replace('{next_action_at}',          lead.next_action_at ? lead.next_action_at.slice(0, 10) : '未設定')
+    .replace('{next_action_overdue_days}',nextActionOverdueDays !== null ? `${nextActionOverdueDays}日超過` : '未設定');
 
   // 担当者メンション
   let mention = '';
@@ -161,6 +193,24 @@ function getSlackMentions_() {
     }
   });
   return mentions;
+}
+
+// alert_rules.last_run_at を更新する専用 RPC（anon は UPDATE 不可のため RPC 経由）
+function markAlertRuleRun_(ruleId) {
+  const { url, key } = getSupabaseConfig_();
+  const resp = UrlFetchApp.fetch(url + '/rest/v1/rpc/mark_alert_rule_run', {
+    method: 'post',
+    headers: {
+      'apikey':        key,
+      'Authorization': 'Bearer ' + key,
+      'Content-Type':  'application/json',
+    },
+    payload:            JSON.stringify({ p_rule_id: ruleId }),
+    muteHttpExceptions: true,
+  });
+  if (resp.getResponseCode() < 200 || resp.getResponseCode() >= 300) {
+    Logger.log('mark_alert_rule_run エラー: ' + resp.getContentText());
+  }
 }
 
 // ============================================================

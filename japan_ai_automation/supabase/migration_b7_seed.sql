@@ -196,6 +196,30 @@ Success Japan株式会社
   '{"meeting_booked": true}', true, 6
 )
 
+-- ⑦ b1-meeting-booked: 面談予約確認メール（即時）
+,
+(
+  'B-1', 'b1-meeting-booked', NULL,
+  'meeting_booked', '{}', 0,
+  NULL, 0,
+  'email',
+  '【面談予約確認】Success Japan',
+  '{name} 様
+
+この度は個別面談のご予約ありがとうございます。
+
+担当者より改めてご連絡させていただきます。
+当日お会いできることを楽しみにしております。
+
+■ ご不明な点がございましたら
+お気軽にご返信いただくか、下記までご連絡ください。
+admin@successjapan.jp
+
+Success Japan株式会社
+西出 高宏',
+  '{}', true, 7
+)
+
 ON CONFLICT (product, node_key) DO UPDATE
   SET subject              = EXCLUDED.subject,
       body                 = EXCLUDED.body,

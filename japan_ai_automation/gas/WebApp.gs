@@ -309,7 +309,7 @@ function bulkEnrollLeads(params) {
       break;
     }
     try {
-      enrollLeadInSequence(leads[i].id, product);
+      enrollLeadV2_(leads[i].id, product);
       enrolled++;
     } catch (e) {
       Logger.log('bulkEnrollLeads: skip id=' + leads[i].id + ' ' + e.message);
@@ -531,7 +531,7 @@ function getCrmStats() {
 
   var queries = [
     { key: 'total',      url: config.url + '/rest/v1/leads?select=id&opted_out=eq.false' },
-    { key: 'active_seq', url: config.url + '/rest/v1/leads?select=id&sequence_step=gt.0&opted_out=eq.false' },
+    { key: 'active_seq', url: config.url + '/rest/v1/leads?select=id&opted_out=eq.false&or=(sequence_step.gt.0,sequence_version.eq.2)' },
     { key: 'this_week',  url: config.url + '/rest/v1/leads?select=id&created_at=gte.' + encodeURIComponent(weekAgo) },
     { key: 'heat_a',     url: config.url + '/rest/v1/leads?select=id&heat=eq.A&opted_out=eq.false' },
   ];
