@@ -1559,12 +1559,20 @@ async function handleScheduledBatchSend() {
   ]);
 
   const targetPath = replyPaths.length > 0 ? replyPaths[0] : firstQueue[0].path;
-  // 友達一覧に該当リンクがあればクリック（Turbo SPA対応）、なければ直接遷移
-  const targetLink = document.querySelector(`a[href="${targetPath}"], a[href="https://tokyo-calendar-date.jp${targetPath}"]`);
-  if (targetLink) {
-    targetLink.click();
+  const targetUrl = 'https://tokyo-calendar-date.jp' + targetPath;
+  console.log('[東カレ] 一斉送信: 移動先=', targetUrl, '(replyPaths:', replyPaths.length, 'firstQueue:', firstQueue.length, ')');
+
+  // Turbo SPA経由で遷移（location.href直接代入はTurboルーターに無視される場合あり）
+  if (window.Turbo?.visit) {
+    window.Turbo.visit(targetUrl);
   } else {
-    location.href = 'https://tokyo-calendar-date.jp' + targetPath;
+    // DOM上にリンクがあればクリック、なければフォールバック
+    const targetLink = document.querySelector(`a[href="${targetPath}"], a[href="${targetUrl}"]`);
+    if (targetLink) {
+      targetLink.click();
+    } else {
+      location.href = targetUrl;
+    }
   }
 }
 
@@ -1598,6 +1606,14 @@ async function sendFirstMessage() {
     ]);
     const pattern = patterns.find((p) => p.id === activePatternId) || {};
     const chatPath = location.pathname.replace(/\/$/, '');
+
+    // stage >= 1 なら初回メッセージ送信済み → 二重送信防止
+    const existingStates = await csGet();
+    if ((existingStates[chatPath]?.stage ?? 0) >= 1) {
+      console.warn('[東カレ] sendFirstMessage: stage >= 1 のためスキップ (二重送信防止)', chatPath);
+      await batchAdvance();
+      return;
+    }
 
     // 📝生成フロー: 事前承認済みテキストがあればClaudeを呼ばずにそのまま送信
     const { batchQueue: bq0 = [] } = await localGet('batchQueue');
