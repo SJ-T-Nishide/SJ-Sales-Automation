@@ -2052,25 +2052,6 @@ async function init() {
     injectMatchSelector();
   }
 
-  // バッチ処理中に想定外ページ（/search/list など）へ飛んでしまった場合、
-  // キューが残っていれば正しいチャットへ自動リダイレクト
-  if (!isConversationPage() && !isFriendIndexPage()) {
-    const [{ batchQueue: bqInit = [] }, { checkQueue: cqInit = [] }] = await Promise.all([
-      localGet('batchQueue'),
-      localGet('checkQueue'),
-    ]);
-    if (bqInit.length > 0) {
-      console.log('[東カレ] 想定外ページ: batchQueue残存 → リダイレクト', bqInit[0].path);
-      location.href = 'https://tokyo-calendar-date.jp' + bqInit[0].path;
-      return;
-    }
-    if (cqInit.length > 0) {
-      console.log('[東カレ] 想定外ページ: checkQueue残存 → リダイレクト', cqInit[0]);
-      location.href = 'https://tokyo-calendar-date.jp' + cqInit[0];
-      return;
-    }
-  }
-
   if (isConversationPage()) {
     const chatPath = location.pathname.replace(/\/$/, '');
     const [{ batchQueue = [] }, { checkQueue = [] }, states] = await Promise.all([
