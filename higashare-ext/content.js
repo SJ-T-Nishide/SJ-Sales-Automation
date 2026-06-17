@@ -1553,8 +1553,10 @@ async function handleScheduledBatchSend() {
 
   console.log(`[東カレ自動化] 一斉処理開始: 返信確認${replyPaths.length}件 + 初回送信${firstQueue.length}件`);
   showNotif(`⏰ 処理開始 (返信${replyPaths.length}件 + 初回${firstQueue.length}件)`, '#27ae60', 3000);
+  // firstQueueがある場合はチェックユーザーのみ処理（checkQueueはセットしない）
+  // → 古い追跡データで「探す」にリダイレクトされるのを防ぐ
   await Promise.all([
-    localSet({ checkQueue: replyPaths }),
+    localSet({ checkQueue: firstQueue.length > 0 ? [] : replyPaths }),
     localSet({ batchQueue: firstQueue }),
   ]);
 
@@ -1589,14 +1591,7 @@ async function batchAdvance() {
     setTimeout(() => { location.href = remaining[0].path; }, 2000);
   } else {
     await localSet({ selectedForBatch: [] });
-    // batchQueue完了後、checkQueue（追跡中の既存会話）が残っていれば継続
-    const { checkQueue: cq = [] } = await localGet('checkQueue');
-    if (cq.length > 0) {
-      setStatus(`一括送信完了 ✓ → 追跡中${cq.length}件を処理します`, '#27ae60');
-      setTimeout(() => { location.href = 'https://tokyo-calendar-date.jp' + cq[0]; }, 2000);
-    } else {
-      setStatus('一括送信完了 ✓', '#27ae60');
-    }
+    setStatus('一括送信完了 ✓', '#27ae60');
   }
 }
 
@@ -1639,24 +1634,29 @@ async function sendFirstMessage() {
       return;
     }
 
-    // スカウト送信済みのユーザーか確認（インバウンドと誤認防止）
-    // scoutSentUserIds は profile_open(ID) のプロフィールIDで保存 → DOM から取得して照合
-    const avatarBtnSF = document.querySelector('a.radius100[onclick*="profile_open"]');
-    const profileIdMatchSF = avatarBtnSF?.getAttribute('onclick')?.match(/profile_open\((\d+)\)/);
-    const scoutCheckId = profileIdMatchSF ? profileIdMatchSF[1] : chatPath.split('/').pop();
-    const { scoutSentUserIds = [] } = await localGet('scoutSentUserIds');
-    if (scoutSentUserIds.includes(scoutCheckId) && countOpponentMessages() > 0) {
-      // スカウト返信 → scoutReplyフローに設定して終了（初回メッセージは送らない）
-      await csUpdate(chatPath, { stage: 1, replyCount: 0, patternId: activePatternId, active: true, scoutReply: true });
-      setStatus('スカウト返信を検出 → 一斉送信でアポ打診します ✓', '#27ae60');
-      console.log('[東カレ] sendFirstMessage: スカウト返信検出 → scoutReplyセット', chatPath);
+    // 会話履歴を先に取得（スカウト返信判定とinbound判定に共用）
+    const historyLines = getConversationHistory();
+    const hasInbound = countOpponentMessages() > 0;
+    const alreadySentMsg = historyLines.some((h) => h.startsWith('自分:'));
+
+    // スカウト返信検出: 既にこちらからメッセージ済み かつ 相手が返信している
+    //   → ③ アポ打診【こちらから先に送った場合】1通目を直送
+    // （scoutSentUserIdsより確実: IDが保存されていなくても会話履歴で判定）
+    if (alreadySentMsg && hasInbound) {
+      console.log('[東カレ] sendFirstMessage: スカウト返信を会話履歴で検出 → apoMsg1直送', chatPath);
+      setStatus('スカウト返信 → アポ打診中...', '#888');
+      const history = historyLines.slice(-20).join('\n');
+      const ok = await sendApoMessages(pattern, history);
+      if (ok) {
+        await csUpdate(chatPath, { stage: 3, replyCount: countOpponentMessages(), patternId: activePatternId, active: true });
+        setStatus('スカウト返信 → アポ打診1通目 ✓', '#27ae60');
+      } else {
+        setStatus('apoMsg1Template未設定', '#e74c3c');
+      }
       await sleep(3000);
       await batchAdvance();
       return;
     }
-
-    // 相手からすでにメッセージが届いている場合はインバウンド用プロンプトを使用
-    const hasInbound = countOpponentMessages() > 0;
     const prompt = pickVariant(hasInbound
       ? (pattern.msg1InboundTemplate || pattern.msg1Template || '')
       : (pattern.msg1Template || ''));
