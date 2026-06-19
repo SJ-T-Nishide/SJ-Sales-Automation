@@ -36,6 +36,8 @@ const ALLOWED_HOST = 'tokyo-calendar-date.jp';
 let likeTimer        = null;
 let likeCount        = 0;
 let isRunning        = false;
+let _sendFirstRunning = false;
+let _pasteOnlyMode = false;
 let consecutiveErrors = 0;
 const MAX_CONSECUTIVE_ERRORS = 3;
 
@@ -98,8 +100,18 @@ function applyNameTemplate(tmpl, name) {
 }
 
 // 会話履歴から相手の名前をClaudeで抽出
-async function extractOpponentName(conversationSummary) {
+// 名前は冒頭で名乗られることが多いため、先頭5行 + 末尾20行を結合して渡す
+async function extractOpponentName() {
   try {
+    const lines = getConversationHistory();
+    const first5 = lines.slice(0, 5);
+    const last20 = lines.slice(-20);
+    const seen = new Set();
+    const merged = [];
+    for (const line of [...first5, ...last20]) {
+      if (!seen.has(line)) { seen.add(line); merged.push(line); }
+    }
+    const conversationSummary = merged.join('\n');
     const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 8000));
     const req = chrome.runtime.sendMessage({ action: 'extractName', payload: { conversationSummary } });
     const res = await Promise.race([req, timeout]);
@@ -112,12 +124,12 @@ async function extractOpponentName(conversationSummary) {
 
 // apoMsg1Template + apoMsg2Template を名前置換して2通送信
 async function sendApoMessages(pattern, history) {
-  const msg1Raw = sanitizeTemplate(pattern.apoMsg1Template || '');
-  const msg2Raw = sanitizeTemplate(pattern.apoMsg2Template || '');
+  const msg1Raw = sanitizeTemplate(pickVariant(pattern.apoMsg1Template || ''));
+  const msg2Raw = sanitizeTemplate(pickVariant(pattern.apoMsg2Template || ''));
   console.log('[東カレ] sendApoMessages msg1Raw:', msg1Raw.slice(0, 30), '| msg2Raw:', msg2Raw.slice(0, 30));
   if (!msg1Raw && !msg2Raw) return false;
 
-  const name = await extractOpponentName(history);
+  const name = await extractOpponentName();
   const msg1 = applyNameTemplate(msg1Raw, name);
   const msg2 = applyNameTemplate(msg2Raw, name);
   console.log('[東カレ] sendApoMessages name:', name, '| msg1:', msg1.slice(0, 30), '| msg2:', msg2.slice(0, 30));
@@ -137,9 +149,9 @@ async function sendApoMessages(pattern, history) {
 
 // inboundApoTemplate を名前置換して送信（1通）
 async function sendInboundApoMessage(pattern, history) {
-  const raw = sanitizeTemplate(pattern.inboundApoTemplate || '');
+  const raw = sanitizeTemplate(pickVariant(pattern.inboundApoTemplate || ''));
   if (!raw) return false;
-  const name = await extractOpponentName(history);
+  const name = await extractOpponentName();
   const msg = applyNameTemplate(raw, name);
   return sendMessageText(msg);
 }
@@ -230,15 +242,37 @@ async function judgeApoReply(conversationSummary) {
   });
 }
 
+// LINEへの移行提案に相手が承諾したか判定（'approved' | 'unclear'）
+async function judgeLineApproval(conversationSummary) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(
+        { action: 'judgeApo', payload: { conversationSummary, context: 'line' } },
+        (result) => {
+          if (chrome.runtime.lastError) {
+            console.warn('[東カレ] LINE承認判定エラー (lastError):', chrome.runtime.lastError.message);
+            resolve('unclear');
+            return;
+          }
+          if (result?.error) {
+            console.warn('[東カレ] LINE承認判定エラー (result):', result.error);
+            resolve('unclear');
+            return;
+          }
+          resolve(result?.result || 'unclear');
+        }
+      );
+    } catch (err) {
+      console.warn('[東カレ] LINE承認判定エラー (catch):', err);
+      resolve('unclear');
+    }
+  });
+}
+
 function countOpponentMessages() {
+  // 相手メッセージ = inline style text-align:left（right=自分, center=システム通知）
   return [...document.querySelectorAll(SEL.messageItem)]
-    .filter((el) => {
-      // text-align:left のみ = 相手メッセージ（right=自分, center=システム通知）
-      if (el.style.textAlign !== 'left') return false;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0) return false;
-      return true;
-    }).length;
+    .filter((el) => el.style.textAlign === 'left').length;
 }
 
 async function sendMessageText(text) {
@@ -274,6 +308,12 @@ async function sendMessageText(text) {
   let btnWait = 0;
   while (btn.disabled && btnWait < 3000) { await sleep(200); btnWait += 200; }
   if (btn.disabled) { console.warn('[東カレ] sendBtn still disabled'); return false; }
+
+  // ペーストのみモード: テキストボックスに貼り付けて終了（送信しない）
+  if (_pasteOnlyMode) {
+    showNotif('✏️ 確認して送信してください', '#3498db', 3000);
+    return true;
+  }
 
   // 送信前の自分メッセージ数を記録して送信成否を検証する
   const beforeMine = document.querySelectorAll(SEL.myMessage).length;
@@ -373,8 +413,10 @@ async function sendApoAccepted(chatPath, judgment, pattern, opponentCount) {
     if (parts.length > 1) await sleep(2000 + Math.floor(Math.random() * 1000));
   }
   if (allSent) {
-    await csUpdate(chatPath, { stage: 4, replyCount: opponentCount, apoJudgment: null });
-    setStatus('アポ承認返信 + LINE送信 ✓', '#27ae60');
+    // LINE URL は警戒防止のため承認後に別送する（2段階フロー）
+    // stage は 3 のまま、apoStatus: 'line_pending' で次の返信を待つ
+    await csUpdate(chatPath, { apoStatus: 'line_pending', replyCount: opponentCount, apoJudgment: null });
+    setStatus('LINE招待送信済み ✓ 承認待ち...', '#8e44ad');
   }
 }
 
@@ -384,8 +426,14 @@ async function executeStageForCurrentChat() {
 
   const states = await csGet();
   const state = states[chatPath];
-  if (!state || state.stage === 0 || state.stage >= 4) return;
-  if (state.active === false) return;
+  if (!state || state.stage === 0 || state.stage >= 4) {
+    console.log(`[東カレ] executeStage skip: stage=${state?.stage} path=${chatPath.split('/').pop()}`);
+    return;
+  }
+  if (state.active === false) {
+    console.log(`[東カレ] executeStage skip: active=false path=${chatPath.split('/').pop()}`);
+    return;
+  }
 
   const [{ patterns = [] }, { activePatternId }, { checkQueue = [] }] = await Promise.all([
     localGet('patterns'), localGet('activePatternId'), localGet('checkQueue'),
@@ -393,6 +441,41 @@ async function executeStageForCurrentChat() {
   const pattern = patterns.find((p) => p.id === (state.patternId || activePatternId)) || {};
   // 一斉送信バッチ中（checkQueueに含まれる）または今すぐ送信ボタン押下時のみ承認メッセージを送信
   const sendApoNow = checkQueue.includes(chatPath) || isSendNowPressed;
+
+  // stage=3: LINE招待送信済み・承認待ち → 相手の返信でLINE URL送信
+  if (state.stage === 3 && state.apoStatus === 'line_pending') {
+    const opponentCountForLine = countOpponentMessages();
+    if (opponentCountForLine <= (state.replyCount || 0)) {
+      setStatus('📱 LINE承認待ち...', '#8e44ad');
+      return;
+    }
+    // 相手が返信してきた → LINE承認を判定
+    setStatus('LINE承認を判定中...', '#888');
+    const lineHistory = getConversationHistory().slice(-10).join('\n');
+    const lineJudgment = await judgeLineApproval(lineHistory);
+    if (lineJudgment === 'approved') {
+      const lineApprovedText = pattern.lineApprovedTemplate || '';
+      if (lineApprovedText) {
+        await sendMessageText(lineApprovedText);
+        await sleep(1000);
+      }
+      const lineUrl = pattern.lineTemplate || '';
+      if (lineUrl) {
+        const sent = await sendMessageText(lineUrl);
+        if (sent) {
+          await csUpdate(chatPath, { stage: 4, apoStatus: null, replyCount: opponentCountForLine });
+          setStatus('LINE URL送信完了 ✓', '#27ae60');
+        }
+      } else {
+        showNotif('❌ LINE URLが設定されていません\n詳細設定 → LINE URLを入力してください', '#e74c3c', 5000);
+      }
+    } else {
+      await csUpdate(chatPath, { apoStatus: 'line_unclear', replyCount: opponentCountForLine });
+      setStatus('❓ LINE承認が判定できませんでした', '#e67e22');
+      showNotif('❓ LINE承認不明\n手動で確認してください', '#e67e22', 5000);
+    }
+    return;
+  }
 
   // stage=3: 承認済み・送信待ちは opponentCount 比較より先にチェック
   if (state.stage === 3 && state.apoJudgment) {
@@ -406,15 +489,37 @@ async function executeStageForCurrentChat() {
   }
 
   const opponentCount = countOpponentMessages();
-  // 絶対安全ガード: 相手から一度も返信がない場合は追加メッセージ・アポ打診を絶対に送らない
+  // 絶対安全ガード: 相手から一度も返信がない場合
   if (opponentCount === 0) {
+    // sendApoNow + stage=1 で自分のメッセージも存在しない場合 → staleステートと判断して初回送信へ
+    if (sendApoNow && state.stage === 1) {
+      const historyLines = getConversationHistory();
+      if (!historyLines.some((h) => h.startsWith('自分:'))) {
+        console.log('[東カレ] stage=1だが自メッセージなし → stage=0リセットして初回送信');
+        await csUpdate(chatPath, { stage: 0 });
+        await sendFirstMessage();
+        return;
+      }
+    }
     console.warn('[東カレ] 追い打ち防止: opponentCount=0 のため送信スキップ (stage=' + state.stage + ', replyCount=' + (state.replyCount || 0) + ')');
     setStatus('返信待ち（相手未返信）', '#888');
     return;
   }
   if (opponentCount <= (state.replyCount || 0)) {
-    setStatus('新しい返信待ち（相手の返信後に自動送信）', '#888');
-    return;
+    // sendApoNow時: インバウンド/apoTrigger達成/stage3 はガードをバイパス
+    const effectiveTrigBypass = Math.max(1, pattern.apoTriggerCount || 3);
+    const hasMsg2 = state.stage === 1 && Boolean(sanitizeTemplate(pickVariant(pattern.msg2Template || '')));
+    const canBypass = sendApoNow && (
+      (state.stage === 1 && state.isInbound) ||
+      (state.stage <= 2 && !hasMsg2) ||
+      state.stage === 3
+    );
+    if (!canBypass) {
+      console.log(`[東カレ] replyCount guard: opponentCount=${opponentCount} replyCount=${state.replyCount} sendApoNow=${sendApoNow} stage=${state.stage} isInbound=${state.isInbound}`);
+      setStatus('新しい返信待ち（相手の返信後に自動送信）', '#888');
+      return;
+    }
+    console.log(`[東カレ] replyCount guard バイパス: opponentCount=${opponentCount} stage=${state.stage} isInbound=${state.isInbound}`);
   }
 
   // apoTriggerCount の最低値は1（0以下は3にフォールバック）
@@ -447,15 +552,28 @@ async function executeStageForCurrentChat() {
     return;
   }
 
+  // stage 1/2 でも早期アポ承認を検出（sendApoNow時のみClaudeを呼ぶ）
+  if (sendApoNow && state.stage <= 2) {
+    const earlyHistory = getConversationHistory().slice(-20).join('\n');
+    setStatus('アポ早期承認チェック中...', '#888');
+    const earlyJudgment = await judgeApoReply(earlyHistory);
+    if (['accepted_meal', 'accepted_cafe', 'accepted_phone'].includes(earlyJudgment)) {
+      console.log('[東カレ] 早期アポ承認 stage=' + state.stage + ' judgment=' + earlyJudgment, chatPath);
+      await csUpdate(chatPath, { stage: 3, apoStatus: 'accepted', apoJudgment: earlyJudgment, replyCount: opponentCount });
+      await sendApoAccepted(chatPath, earlyJudgment, pattern, opponentCount);
+      return;
+    }
+  }
+
   let stagePrompt = null;
   let nextStage = state.stage;
 
   if (state.stage === 1) {
-    stagePrompt = sanitizeTemplate(pattern.msg2Template);
+    stagePrompt = sanitizeTemplate(pickVariant(pattern.msg2Template || ''));
     nextStage = 2;
     // msg2Template未設定時、アポ打診条件を満たしていれば直接2通送信してstage3へ
-    if (!stagePrompt && opponentCount >= effectiveApoTrigger) {
-      console.log('[東カレ] stage 1→3 アポ直送: opponentCount=' + opponentCount + ', trigger=' + effectiveApoTrigger);
+    if (!stagePrompt && (opponentCount >= effectiveApoTrigger || sendApoNow)) {
+      console.log('[東カレ] stage 1→3 アポ直送: opponentCount=' + opponentCount + ', trigger=' + effectiveApoTrigger + ', sendApoNow=' + sendApoNow);
       setStatus('アポ送信中...', '#888');
       const history = getConversationHistory().slice(-20).join('\n');
       const ok = await sendApoMessages(pattern, history);
@@ -467,8 +585,8 @@ async function executeStageForCurrentChat() {
       return;
     }
   } else if (state.stage === 2) {
-    if (opponentCount >= effectiveApoTrigger) {
-      console.log('[東カレ] stage 2→3 アポ直送: opponentCount=' + opponentCount + ', trigger=' + effectiveApoTrigger);
+    if (opponentCount >= effectiveApoTrigger || sendApoNow) {
+      console.log('[東カレ] stage 2→3 アポ直送: opponentCount=' + opponentCount + ', trigger=' + effectiveApoTrigger + ', sendApoNow=' + sendApoNow);
       setStatus('アポ送信中...', '#888');
       const history = getConversationHistory().slice(-20).join('\n');
       const ok = await sendApoMessages(pattern, history);
@@ -737,7 +855,7 @@ async function runScoutCycle() {
   const { messageHashes = [] } = await localGet('messageHashes');
   await doOneScout(pattern, today, messageHashes, todayCount);
 
-  const delay = 3000 + Math.floor(Math.random() * 4000);
+  const delay = 2000 + Math.floor(Math.random() * 4001);
   scoutTimer = setTimeout(runScoutCycle, delay);
 }
 
@@ -897,11 +1015,8 @@ async function startAutoLike() {
 
     await doOneLike(freshToday);
 
-    // 次回まで待機: 70%→8〜20s、25%→20〜40s、5%→90〜180s
-    const r = Math.random();
-    const delay = r < 0.70 ? 8000  + Math.floor(Math.random() * 12001)
-               : r < 0.95 ? 20000 + Math.floor(Math.random() * 20001)
-               :             90000 + Math.floor(Math.random() * 90001);
+    // 次回まで待機: 2〜6s
+    const delay = 2000 + Math.floor(Math.random() * 4001);
     likeTimer = setTimeout(runLikeCycle, delay);
   }
 
@@ -1058,11 +1173,11 @@ async function injectSendNowButton() {
   const chatPath = location.pathname.replace(/\/$/, '');
   const states = await csGet();
   const state = states[chatPath];
-  const canSend = state && state.stage >= 1 && state.stage <= 3 && state.active !== false;
+  const isDone = state && state.stage >= 4;
 
   let btn = document.getElementById('hg-send-now');
   if (btn) {
-    btn.style.opacity = canSend ? '1' : '0.4';
+    btn.style.opacity = isDone ? '0.4' : '1';
     return;
   }
 
@@ -1070,14 +1185,37 @@ async function injectSendNowButton() {
   btn.id = 'hg-send-now';
   btn.textContent = '▶ 今すぐ送信';
   btn.style.cssText = [
-    'position:fixed', 'bottom:70px', 'left:50%', 'transform:translateX(-50%)',
+    'position:fixed', 'top:58px', 'right:10px',
     'z-index:99997', 'background:#e74c3c', 'color:#fff',
-    'border:none', 'border-radius:20px', 'padding:8px 20px',
-    'font-size:13px', 'font-weight:bold', 'cursor:pointer',
-    'box-shadow:0 2px 8px rgba(0,0,0,.3)',
-    canSend ? '' : 'opacity:0.4;',
+    'border:none', 'border-radius:14px', 'padding:5px 12px',
+    'font-size:12px', 'font-weight:bold', 'cursor:pointer',
+    'box-shadow:0 2px 6px rgba(0,0,0,.4)',
+    isDone ? 'opacity:0.4;' : '',
   ].join(';');
   document.body.appendChild(btn);
+}
+
+function injectChatLayoutFix() {
+  if (!isConversationPage()) return;
+  if (document.getElementById('hg-chat-layout-fix')) return;
+  const style = document.createElement('style');
+  style.id = 'hg-chat-layout-fix';
+  style.textContent = `
+    form.new_message_mb4 {
+      position: sticky !important;
+      bottom: 0 !important;
+      z-index: 9990 !important;
+      background: #fff !important;
+    }
+    #messages {
+      padding-bottom: 0 !important;
+    }
+    body {
+      overflow-y: auto !important;
+      height: auto !important;
+    }
+  `;
+  document.head.appendChild(style);
 }
 
 function btnStyle(bg) {
@@ -1222,112 +1360,14 @@ async function injectMatchSelector() {
   if (!isFriendIndexPage()) return;
   await sleep(400);
 
-  const [states, { selectedForBatch = [] }] = await Promise.all([
-    csGet(),
-    localGet('selectedForBatch'),
-  ]);
-
-  // パネルがなければ作成
-  let panel = document.getElementById('hg-match-panel');
-  let countEl, genBtn, sendBtn, stopBtn;
-
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = 'hg-match-panel';
-    panel.style.cssText = [
-      'position:fixed', 'top:56px', 'left:0', 'right:0', 'z-index:999999',
-      'background:#1a1a2e', 'color:#fff', 'padding:8px 12px',
-      'display:flex', 'align-items:center', 'gap:8px',
-      'box-shadow:0 2px 8px rgba(0,0,0,.4)',
-    ].join(';');
-
-    countEl = document.createElement('span');
-    countEl.id = 'hg-match-count';
-    countEl.style.cssText = 'font-size:12px;flex:1;';
-
-    genBtn = document.createElement('button');
-    genBtn.id = 'hg-match-gen';
-    genBtn.textContent = '📝 生成';
-    genBtn.style.cssText = [
-      'background:#2980b9', 'color:#fff', 'border:none',
-      'border-radius:6px', 'padding:6px 10px', 'font-size:12px', 'cursor:pointer',
-    ].join(';');
-
-    sendBtn = document.createElement('button');
-    sendBtn.id = 'hg-match-send';
-    sendBtn.textContent = '⚡ 一斉送信を起動';
-    sendBtn.style.cssText = [
-      'background:#e74c3c', 'color:#fff', 'border:none',
-      'border-radius:6px', 'padding:6px 10px', 'font-size:12px', 'cursor:pointer',
-    ].join(';');
-
-    stopBtn = document.createElement('button');
-    stopBtn.id = 'hg-match-stop';
-    stopBtn.textContent = '⏹ 停止';
-    stopBtn.style.cssText = [
-      'background:#7f8c8d', 'color:#fff', 'border:none',
-      'border-radius:6px', 'padding:6px 10px', 'font-size:12px', 'cursor:pointer',
-    ].join(';');
-
-    panel.appendChild(countEl);
-    panel.appendChild(genBtn);
-    panel.appendChild(sendBtn);
-    panel.appendChild(stopBtn);
-    document.body.appendChild(panel);
-
-    genBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-
-      const { selectedForBatch: sel = [] } = await localGet('selectedForBatch');
-      if (sel.length === 0) {
-        showNotif('候補生成: チェックボックスで対象を選択してください', '#e67e22', 3000);
-        return;
-      }
-
-      const job = sel.map((path) => {
-        let name = path.split('/').pop();
-        document.querySelectorAll('.hg-match-cb').forEach((cb) => {
-          if (cb.dataset.chatPath === path) name = cb.dataset.name || name;
-        });
-        return { path, name, conversationType: 'first', profile: '', lastMessage: '' };
-      });
-
-      const { activePatternId = '' } = await localGet('activePatternId');
-
-      let calendarSlots = [];
-      try {
-        const calRes = await chrome.runtime.sendMessage({ action: 'fetchCalendarSlots' });
-        if (Array.isArray(calRes)) calendarSlots = calRes;
-        else if (calRes?.slots) calendarSlots = calRes.slots;
-      } catch (_) {}
-
-      await localSet({ candidatesJob: { job, calendarSlots, patternId: activePatternId } });
-      chrome.runtime.sendMessage({ action: 'openCandidates' });
-    });
-
-    sendBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      await handleScheduledBatchSend();
-    });
-
-    stopBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      await Promise.all([
-        localSet({ checkQueue: [], batchQueue: [], selectedForBatch: [] }),
-      ]);
-      // チェックボックスを全解除
-      document.querySelectorAll('.hg-match-cb:checked').forEach((cb) => { cb.checked = false; });
-      countEl.textContent = `マッチ ${document.querySelectorAll('.hg-match-cb').length}件`;
-      showNotif('⏹ 一斉送信を停止しました', '#7f8c8d', 3000);
-    });
-  } else {
-    countEl = document.getElementById('hg-match-count');
-    genBtn   = document.getElementById('hg-match-gen');
-    sendBtn  = document.getElementById('hg-match-send');
-    stopBtn  = document.getElementById('hg-match-stop');
+  const [states, rawSel] = await Promise.all([csGet(), localGet('selectedPaths')]);
+  // migration: selectedForBatch → selectedPaths (一度だけ実行)
+  let selectedPaths = rawSel.selectedPaths;
+  if (!selectedPaths) {
+    const { selectedForBatch: sfb = [] } = await localGet('selectedForBatch');
+    selectedPaths = sfb;
+    await localSet({ selectedPaths });
+    chrome.storage.local.remove(['selectedForBatch', 'excludedFromReply']);
   }
 
   // 全liを走査（新しく追加されたliも含む）
@@ -1357,26 +1397,50 @@ async function injectMatchSelector() {
       cb.className = 'hg-match-cb';
       cb.dataset.chatPath = chatPath;
       cb.dataset.name = name;
-      cb.checked = selectedForBatch.includes(chatPath);
+      cb.checked = selectedPaths.includes(chatPath);
       cb.style.cssText = 'width:18px;height:18px;cursor:pointer;margin:0 8px 0 4px;vertical-align:middle;accent-color:#e74c3c;flex-shrink:0;';
       li.insertBefore(cb, li.firstChild);
       cb.addEventListener('click', (e) => e.stopPropagation());
       cb.addEventListener('change', async () => {
-        const { selectedForBatch: cur = [] } = await localGet('selectedForBatch');
+        const { selectedPaths: cur = [] } = await localGet('selectedPaths');
         const updated = cb.checked
           ? [...new Set([...cur, chatPath])]
           : cur.filter((p) => p !== chatPath);
-        await localSet({ selectedForBatch: updated });
-        const n = document.querySelectorAll('.hg-match-cb:checked').length;
-        countEl.textContent = n > 0 ? `${n}件選択中` : `マッチ ${allMatchLis.length}件`;
+        await localSet({ selectedPaths: updated });
+        const checked = document.querySelectorAll('.hg-match-cb:checked').length;
+        const total = document.querySelectorAll('.hg-match-cb').length;
+        chrome.runtime.sendMessage({ action: 'matchCountUpdate', checked, total }).catch(() => {});
       });
     } else if (stage >= 1 && stage <= 3) {
+      // ── 一斉送信チェックボックス（デフォルト=unchecked、チェックで選択）──
+      const rcb = document.createElement('input');
+      rcb.type = 'checkbox';
+      rcb.className = 'hg-reply-cb';
+      rcb.dataset.chatPath = chatPath;
+      rcb.checked = selectedPaths.includes(chatPath);
+      rcb.style.cssText = 'width:16px;height:16px;cursor:pointer;margin:0 4px 0 4px;accent-color:#27ae60;flex-shrink:0;vertical-align:middle;';
+      rcb.title = 'チェックして一斉送信に含める';
+      rcb.addEventListener('click', (e) => e.stopPropagation());
+      rcb.addEventListener('change', async () => {
+        const { selectedPaths: cur = [] } = await localGet('selectedPaths');
+        const updated = rcb.checked
+          ? [...new Set([...cur, chatPath])]
+          : cur.filter((p) => p !== chatPath);
+        await localSet({ selectedPaths: updated });
+      });
+      li.insertBefore(rcb, li.firstChild);
+
+      // ── 追跡バッジ ──
       const apoStatus = state.apoStatus || null;
       let badgeText, badgeColor;
       if (!isActive && apoStatus === 'rejected') {
         badgeText = '🚫拒否';  badgeColor = '#e74c3c';
       } else if (!isActive && apoStatus === 'unclear') {
         badgeText = '❓判別不能'; badgeColor = '#e67e22';
+      } else if (apoStatus === 'line_pending') {
+        badgeText = '📱LINE待ち'; badgeColor = '#8e44ad';
+      } else if (apoStatus === 'line_unclear') {
+        badgeText = '❓LINE不明'; badgeColor = '#e67e22';
       } else if (isActive) {
         badgeText = '🟢追跡中'; badgeColor = '#27ae60';
       } else {
@@ -1387,7 +1451,7 @@ async function injectMatchSelector() {
       tag.dataset.active = isActive ? '1' : '0';
       tag.textContent = badgeText;
       tag.style.cssText = [
-        'font-size:10px', 'cursor:pointer', 'margin:0 8px 0 4px',
+        'font-size:10px', 'cursor:pointer', 'margin:0 8px 0 0',
         `color:${badgeColor}`, 'flex-shrink:0', 'user-select:none',
       ].join(';');
       tag.title = (!isActive && apoStatus === 'rejected') ? 'タップで追跡再開' : (isActive ? 'タップで一時停止' : 'タップで追跡再開');
@@ -1417,7 +1481,7 @@ async function injectMatchSelector() {
         e.stopPropagation();
         doToggle().catch(() => {});
       });
-      li.insertBefore(tag, li.firstChild);
+      li.insertBefore(tag, rcb.nextSibling);
     } else {
       const tag = document.createElement('span');
       tag.className = 'hg-done-badge';
@@ -1427,12 +1491,24 @@ async function injectMatchSelector() {
     }
   });
 
-  // カウント・送信ボタン更新
+  // ポップアップにカウントをブロードキャスト
   const checkedCount = document.querySelectorAll('.hg-match-cb:checked').length;
-  countEl.textContent = checkedCount > 0 ? `${checkedCount}件選択中` : `マッチ ${allMatchLis.length}件`;
-  const hasCbs = !!document.querySelector('.hg-match-cb');
-  if (genBtn)  genBtn.style.display  = hasCbs ? '' : 'none';
-  if (sendBtn) sendBtn.style.display = hasCbs ? '' : 'none';
+  const totalCbs = allMatchLis.length;
+  chrome.runtime.sendMessage({ action: 'matchCountUpdate', checked: checkedCount, total: totalCbs }).catch(() => {});
+
+  // 🗑️ リセットボタン（一度だけ注入）
+  if (!document.getElementById('hg-match-reset')) {
+    const resetBtn = document.createElement('button');
+    resetBtn.id = 'hg-match-reset';
+    resetBtn.textContent = '🗑️ ステートリセット';
+    resetBtn.style.cssText = [
+      'position:fixed', 'bottom:20px', 'left:20px', 'z-index:999999',
+      'background:#7f8c8d', 'color:#fff', 'border:none', 'border-radius:20px',
+      'padding:7px 14px', 'font-size:12px', 'font-weight:bold',
+      'cursor:pointer', 'box-shadow:0 2px 8px rgba(0,0,0,.3)',
+    ].join(';');
+    document.body.appendChild(resetBtn);
+  }
 }
 
 // ============================================================
@@ -1466,11 +1542,10 @@ function getTypedSlots(freeDays, type) {
 }
 
 function buildApoAcceptedReply(apoType, slots, pattern) {
-  const lineUrl    = pattern.lineTemplate || '';
   const dateBlock  = slots.length > 0 ? '\n\n' + slots.join('\n') : '';
   // Part1用: trailing newlines なし（dateBlockの\n\nで間が空く）
   const slotHeader1 = slots.length > 0 ? 'このあたり空いてます！' : '';
-  // Part2用: trailing newlines あり（直後にLINE誘導テキストが続く）
+  // Part2用: LINE誘導テキストのみ（URLは別送・LINE 2段階フロー）
   const slotHeader2 = slots.length > 0 ? 'このあたり空いてます！\n\n' : '';
 
   function buildPart1(p1base) {
@@ -1482,8 +1557,7 @@ function buildApoAcceptedReply(apoType, slots, pattern) {
 
   function buildPart2(p2base) {
     if (p2base.includes('{slot_header}')) {
-      const p2 = p2base.replace('{slot_header}', slotHeader2);
-      return lineUrl ? p2 + '\n' + lineUrl : p2;
+      return p2base.replace('{slot_header}', slotHeader2);
     }
     // 後方互換: slots空の場合、先頭の「空いてます」系行を自動除去
     let p2 = p2base;
@@ -1495,24 +1569,24 @@ function buildApoAcceptedReply(apoType, slots, pattern) {
         p2 = lines.slice(i).join('\n');
       }
     }
-    return lineUrl ? p2 + '\n' + lineUrl : p2;
+    return p2;
   }
 
   if (apoType === 'accepted_meal') {
-    const p1base = pattern.apoMealPart1 || 'うれしいです！是非行きましょう。\n楽しみ！';
-    const p2base = pattern.apoMealPart2 ||
+    const p1base = pickVariant(pattern.apoMealPart1 || '') || 'うれしいです！是非行きましょう。\n楽しみ！';
+    const p2base = pickVariant(pattern.apoMealPart2 || '') ||
       'よかったらＬＩＮＥで店決めたり予定たてませんか？\nこれ、ＬＩＮＥの友達追加のやつです。\nラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ！';
     return [buildPart1(p1base), buildPart2(p2base)];
   }
   if (apoType === 'accepted_cafe') {
-    const p1base = pattern.apoCafePart1 || 'うれしいです！是非行きましょう。\n楽しみ！';
-    const p2base = pattern.apoCafePart2 ||
+    const p1base = pickVariant(pattern.apoCafePart1 || '') || 'うれしいです！是非行きましょう。\n楽しみ！';
+    const p2base = pickVariant(pattern.apoCafePart2 || '') ||
       'よかったらＬＩＮＥで店決めたり予定たてませんか？\nラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ。';
     return [buildPart1(p1base), buildPart2(p2base)];
   }
   if (apoType === 'accepted_phone') {
-    const p1base = pattern.apoPhonePart1 || '電話ありです！是非しましょう。';
-    const p2base = pattern.apoPhonePart2 ||
+    const p1base = pickVariant(pattern.apoPhonePart1 || '') || '電話ありです！是非しましょう。';
+    const p2base = pickVariant(pattern.apoPhonePart2 || '') ||
       'LINE電話でもいいですか？\nこれLINEの友達追加のやつです。\n\nこのままが良ければそれでもOKです！';
     return [buildPart1(p1base), buildPart2(p2base)];
   }
@@ -1533,52 +1607,73 @@ async function handleScheduledBatchSend() {
   isRunning = false;
   isFootprintRunning = false;
   const states = await csGet();
+  const { selectedPaths = [] } = await localGet('selectedPaths');
 
-  // 返信待ち追跡中会話をcheckQueueに積む（先に処理）
-  const replyPaths = Object.entries(states)
-    .filter(([, s]) => s.stage >= 1 && s.stage <= 3 && s.active !== false)
-    .map(([path]) => path);
-
-  // チェックされた初回送信対象をbatchQueueに積む（後で処理）
-  const { selectedForBatch = [] } = await localGet('selectedForBatch');
-  const firstQueue = selectedForBatch
+  // チェックされた人のみ対象（opt-in）。ステージに関わらず selectedPaths から振り分け
+  const replyPaths = selectedPaths
+    .filter((path) => { const s = states[path]; return s && s.stage >= 1 && s.stage <= 3 && s.active !== false; });
+  const firstQueue = selectedPaths
     .filter((path) => (states[path]?.stage ?? 0) === 0)
     .map((path) => ({ path, name: path.split('/').pop() }));
 
   if (replyPaths.length === 0 && firstQueue.length === 0) {
-    console.log('[東カレ自動化] 一斉処理: 対象なし');
-    showNotif('対象なし\n追跡中の会話がないか\nチェックボックスで対象を選択してください', '#e67e22', 5000);
+    console.log('[東カレ自動化] 選択のみ送信: 対象なし');
+    showNotif('対象なし\nチェックボックスで送信対象を選んでから実行してください', '#e67e22', 5000);
     return;
   }
 
-  console.log(`[東カレ自動化] 一斉処理開始: 返信確認${replyPaths.length}件 + 初回送信${firstQueue.length}件`);
-  showNotif(`⏰ 処理開始 (返信${replyPaths.length}件 + 初回${firstQueue.length}件)`, '#27ae60', 3000);
-  // firstQueueがある場合はチェックユーザーのみ処理（checkQueueはセットしない）
-  // → 古い追跡データで「探す」にリダイレクトされるのを防ぐ
+  console.log(`[東カレ自動化] 選択のみ送信: 返信${replyPaths.length}件 + 初回${firstQueue.length}件`);
+  showNotif(`⏰ 選択のみ送信 (返信${replyPaths.length}件 + 初回${firstQueue.length}件)`, '#27ae60', 3000);
   await Promise.all([
-    localSet({ checkQueue: firstQueue.length > 0 ? [] : replyPaths }),
+    localSet({ checkQueue: replyPaths }),
     localSet({ batchQueue: firstQueue }),
   ]);
 
-  // firstQueueがある場合は先に処理（ユーザーが明示的にチェックした相手を優先）
-  // replyPaths（追跡中の既存会話）はbatchQueue完了後にadvanceCheckQueueが処理する
-  const targetPath = firstQueue.length > 0 ? firstQueue[0].path : replyPaths[0];
-  const targetUrl = 'https://tokyo-calendar-date.jp' + targetPath;
-  console.log('[東カレ] 一斉送信: 移動先=', targetUrl, '(replyPaths:', replyPaths.length, 'firstQueue:', firstQueue.length, ')');
-
-  // Turbo SPA経由で遷移（location.href直接代入はTurboルーターに無視される場合あり）
-  if (window.Turbo?.visit) {
-    window.Turbo.visit(targetUrl);
+  if (replyPaths.length > 0) {
+    location.href = replyPaths[0];
   } else {
-    const targetLink = document.querySelector(`a[href="${targetPath}"], a[href="${targetUrl}"]`);
-    if (targetLink) {
-      targetLink.click();
-    } else {
-      location.href = targetUrl;
-    }
+    location.href = firstQueue[0].path;
   }
 }
 
+
+// 全体送信: stage 1-3 全アクティブ（excludedFromReply無視）+ stage 0 選択済み
+async function handleFullBatchSend() {
+  await Promise.all([
+    localSet({ checkQueue: [], batchQueue: [] }),
+    localSet({ scoutRunning: false, autoLikeRunning: false, footprintRunning: false }),
+  ]);
+  isScoutRunning = false;
+  isRunning = false;
+  isFootprintRunning = false;
+  const states = await csGet();
+
+  // stage 1-3: conversationStates 全件（選択状態に関わらず）
+  const replyPaths = Object.entries(states)
+    .filter(([, s]) => s.stage >= 1 && s.stage <= 3 && s.active !== false)
+    .map(([path]) => path);
+
+  // stage 0: selectedPaths でチェックされたもの
+  const { selectedPaths = [] } = await localGet('selectedPaths');
+  const firstQueue = selectedPaths
+    .filter((path) => (states[path]?.stage ?? 0) === 0)
+    .map((path) => ({ path, name: path.split('/').pop() }));
+
+  if (replyPaths.length === 0 && firstQueue.length === 0) {
+    showNotif('対象なし\n追跡中の会話がないか\nstage 0はチェックボックスで選択してください', '#e67e22', 5000);
+    return;
+  }
+
+  console.log(`[東カレ自動化] 全体送信: 返信${replyPaths.length}件 + 初回${firstQueue.length}件`);
+  showNotif(`⏰ 全体送信 (返信${replyPaths.length}件 + 初回${firstQueue.length}件)`, '#27ae60', 3000);
+  await Promise.all([localSet({ checkQueue: replyPaths }), localSet({ batchQueue: firstQueue })]);
+
+  if (replyPaths.length > 0) {
+    location.href = replyPaths[0];
+  } else {
+    location.href = firstQueue[0].path;
+  }
+}
 
 async function batchAdvance() {
   const { batchQueue = [] } = await localGet('batchQueue');
@@ -1590,17 +1685,23 @@ async function batchAdvance() {
     setStatus(`次の相手へ移動中... (残り${remaining.length}件)`, '#888');
     setTimeout(() => { location.href = remaining[0].path; }, 2000);
   } else {
-    await localSet({ selectedForBatch: [] });
     setStatus('一括送信完了 ✓', '#27ae60');
+    showNotif('✅ 一斉送信完了', '#27ae60', 3000);
   }
 }
 
 async function sendFirstMessage() {
+  if (_sendFirstRunning) {
+    if (isSendNowPressed) showNotif('⏳ 処理中です。しばらくお待ちください', '#888', 2000);
+    return;
+  }
+  _sendFirstRunning = true;
   setStatus('準備中...', '#888');
   // SW起動確認（30秒タイムアウト対策）
   try {
     await chrome.runtime.sendMessage({ action: 'keepalive' });
   } catch (_) {
+    showNotif('🔄 SW再起動待ち... (2秒)', '#888', 3000);
     await sleep(2000);
   }
   try {
@@ -1612,7 +1713,9 @@ async function sendFirstMessage() {
 
     // stage >= 1 なら初回メッセージ送信済み → 二重送信防止
     const existingStates = await csGet();
-    if ((existingStates[chatPath]?.stage ?? 0) >= 1) {
+    const existingStage = existingStates[chatPath]?.stage ?? 0;
+    console.log(`[東カレ] sendFirstMessage start: path=${chatPath.split('/').pop()} stage=${existingStage}`);
+    if (existingStage >= 1) {
       console.warn('[東カレ] sendFirstMessage: stage >= 1 のためスキップ (二重送信防止)', chatPath);
       await batchAdvance();
       return;
@@ -1640,15 +1743,26 @@ async function sendFirstMessage() {
     const alreadySentMsg = historyLines.some((h) => h.startsWith('自分:'));
 
     // スカウト返信検出: 既にこちらからメッセージ済み かつ 相手が返信している
-    //   → ③ アポ打診【こちらから先に送った場合】1通目を直送
-    // （scoutSentUserIdsより確実: IDが保存されていなくても会話履歴で判定）
     if (alreadySentMsg && hasInbound) {
-      console.log('[東カレ] sendFirstMessage: スカウト返信を会話履歴で検出 → apoMsg1直送', chatPath);
-      setStatus('スカウト返信 → アポ打診中...', '#888');
       const history = historyLines.slice(-20).join('\n');
+      const opCount = countOpponentMessages();
+
+      // まずアポ承認済みか判定（リセット後の再実行でLINE打診漏れ・二重打診を防ぐ）
+      setStatus('返答判定中...', '#888');
+      const judgment = await judgeApoReply(history);
+      if (['accepted_meal', 'accepted_cafe', 'accepted_phone'].includes(judgment)) {
+        await csUpdate(chatPath, { stage: 3, apoStatus: 'accepted', apoJudgment: judgment, replyCount: opCount, patternId: activePatternId, active: true });
+        await sendApoAccepted(chatPath, judgment, pattern, opCount);
+        await sleep(3000);
+        await batchAdvance();
+        return;
+      }
+
+      // 未承認 or 不明 → アポ打診
+      setStatus('スカウト返信 → アポ打診中...', '#888');
       const ok = await sendApoMessages(pattern, history);
       if (ok) {
-        await csUpdate(chatPath, { stage: 3, replyCount: countOpponentMessages(), patternId: activePatternId, active: true });
+        await csUpdate(chatPath, { stage: 3, replyCount: opCount, patternId: activePatternId, active: true });
         setStatus('スカウト返信 → アポ打診1通目 ✓', '#27ae60');
       } else {
         setStatus('apoMsg1Template未設定', '#e74c3c');
@@ -1657,6 +1771,7 @@ async function sendFirstMessage() {
       await batchAdvance();
       return;
     }
+
     const prompt = pickVariant(hasInbound
       ? (pattern.msg1InboundTemplate || pattern.msg1Template || '')
       : (pattern.msg1Template || ''));
@@ -1670,7 +1785,7 @@ async function sendFirstMessage() {
 
     setStatus('Claude生成中...', '#888');
     const opponentSummary = getOpponentSummary();
-    const conversationHistory = hasInbound ? getConversationHistory().slice(-10).join('\n') : '';
+    const conversationHistory = hasInbound ? historyLines.slice(-10).join('\n') : '';
     const generated = await generateFromPrompt(prompt, conversationHistory, opponentSummary);
 
     if (!generated) {
@@ -1688,7 +1803,7 @@ async function sendFirstMessage() {
       // isInbound フラグを保存（一斉送信バッチがアポ打診に inboundApoTemplate を使うために参照）
       await csUpdate(chatPath, { stage: 1, replyCount: currentOpponentCount, patternId: activePatternId, active: true, isInbound: hasInbound });
       if (hasInbound) {
-        // インバウンドの場合: 15秒後にアポ打診を自動送信
+        // インバウンドの場合: 3分後にアポ打診を自動送信
         const capturedPath = chatPath;
         setTimeout(async () => {
           try {
@@ -1702,12 +1817,11 @@ async function sendFirstMessage() {
             ]);
             const pat2 = pats2.find((p) => p.id === (st.patternId || apid2)) || {};
             const hist2 = getConversationHistory().slice(-20).join('\n');
-            setStatus('アポ打診中（15秒タイマー）...', '#888');
+            setStatus('アポ打診中（3分タイマー）...', '#888');
             const ok2 = await sendInboundApoMessage(pat2, hist2);
             if (ok2) {
               await csUpdate(capturedPath, { stage: 3, replyCount: countOpponentMessages(), isInbound: false });
               setStatus('インバウンドアポ打診 ✓', '#27ae60');
-              console.log('[東カレ] インバウンドアポ打診完了（15秒タイマー）', capturedPath);
             } else {
               setStatus('③ アポ打診（インバウンド用）テンプレート未設定', '#e74c3c');
               console.warn('[東カレ] inboundApoTemplate未設定', capturedPath);
@@ -1715,8 +1829,8 @@ async function sendFirstMessage() {
           } catch (err) {
             console.warn('[東カレ] インバウンドアポタイマーエラー:', err);
           }
-        }, 15 * 1000);
-        setStatus('返信送信済み ✓ 15秒後にアポ打診します ⏱', '#27ae60');
+        }, 5 * 1000);
+        setStatus('返信送信済み ✓ 5秒後にアポ打診します ⏱', '#27ae60');
       } else {
         setStatus('初回メッセージを送信しました ✓', '#27ae60');
       }
@@ -1731,6 +1845,8 @@ async function sendFirstMessage() {
     setStatus('エラー: ' + err.message, '#e74c3c');
     await sleep(3000);
     await batchAdvance();
+  } finally {
+    _sendFirstRunning = false;
   }
 }
 
@@ -1894,12 +2010,66 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'stopFootprint')  stopAutoFootprint('ポップアップから停止');
   if (message.action === 'startScout')       startAutoScout().catch(() => {});
   if (message.action === 'stopScout')        stopAutoScout('ポップアップから停止');
-  if (message.action === 'startBatchSend')   handleScheduledBatchSend().catch(() => {});
+  if (message.action === 'startBatchSend')     handleScheduledBatchSend().catch(() => {});
+  if (message.action === 'startFullBatchSend') handleFullBatchSend().catch(() => {});
+  if (message.action === 'selectAllMatches') {
+    (async () => {
+      const allCbs = [...document.querySelectorAll('.hg-match-cb, .hg-reply-cb')];
+      allCbs.forEach((cb) => { cb.checked = true; });
+      const allPaths = allCbs.map((cb) => cb.dataset.chatPath).filter(Boolean);
+      await localSet({ selectedPaths: [...new Set(allPaths)] });
+      const stage0Total = document.querySelectorAll('.hg-match-cb').length;
+      chrome.runtime.sendMessage({ action: 'matchCountUpdate', checked: stage0Total, total: stage0Total }).catch(() => {});
+      showNotif(`✅ 全${allPaths.length}件を選択`, '#27ae60', 2000);
+    })().catch(() => {});
+  }
+  if (message.action === 'deselectAllMatches') {
+    (async () => {
+      document.querySelectorAll('.hg-match-cb, .hg-reply-cb').forEach((cb) => { cb.checked = false; });
+      await localSet({ selectedPaths: [] });
+      const total = document.querySelectorAll('.hg-match-cb').length;
+      chrome.runtime.sendMessage({ action: 'matchCountUpdate', checked: 0, total }).catch(() => {});
+      showNotif('⬜ 全選択を解除', '#7f8c8d', 2000);
+    })().catch(() => {});
+  }
+  if (message.action === 'genCandidatesFromPopup') {
+    (async () => {
+      if (!isFriendIndexPage()) {
+        showNotif('友達一覧ページで操作してください', '#e67e22', 3000);
+        return;
+      }
+      const states = await csGet();
+      const { selectedPaths: sel = [] } = await localGet('selectedPaths');
+      const stage0Sel = sel.filter((path) => (states[path]?.stage ?? 0) === 0);
+      if (stage0Sel.length === 0) {
+        showNotif('候補生成: stage 0の相手にチェックを入れてください', '#e67e22', 3000);
+        return;
+      }
+      const job = stage0Sel.map((path) => {
+        let name = path.split('/').pop();
+        document.querySelectorAll('.hg-match-cb').forEach((cb) => {
+          if (cb.dataset.chatPath === path) name = cb.dataset.name || name;
+        });
+        return { path, name, conversationType: 'first', profile: '', lastMessage: '' };
+      });
+      const { activePatternId = '' } = await localGet('activePatternId');
+      let calendarSlots = [];
+      try {
+        const calRes = await chrome.runtime.sendMessage({ action: 'fetchCalendarSlots' });
+        if (Array.isArray(calRes)) calendarSlots = calRes;
+        else if (calRes?.slots) calendarSlots = calRes.slots;
+      } catch (_) {}
+      await localSet({ candidatesJob: { job, calendarSlots, patternId: activePatternId } });
+      chrome.tabs.create({ url: chrome.runtime.getURL('candidates.html') });
+    })().catch(() => {});
+  }
   if (message.action === 'stopBatchSend') {
     Promise.all([
-      localSet({ checkQueue: [] }),
-      localSet({ batchQueue: [] }),
+      localSet({ checkQueue: [], batchQueue: [], selectedPaths: [] }),
     ]).then(() => {
+      document.querySelectorAll('.hg-match-cb:checked, .hg-reply-cb:checked').forEach((cb) => { cb.checked = false; });
+      const total = document.querySelectorAll('.hg-match-cb').length;
+      chrome.runtime.sendMessage({ action: 'matchCountUpdate', checked: 0, total }).catch(() => {});
       showNotif('⏹ 一斉送信を停止しました', '#e67e22', 3000);
     }).catch(() => {});
   }
@@ -1997,43 +2167,70 @@ function showApprovedNotification(item, pasted = false) {
 // 拡張UI要素クリック時は東カレのハンドラを完全にブロックする。
 // ============================================================
 
+function handleSendNowPress(targetEl) {
+  const btn = targetEl ? targetEl.closest('#hg-send-now') : document.getElementById('hg-send-now');
+  if (btn && parseFloat(btn.style.opacity || '1') < 1) {
+    showNotif('送信完了済みのチャットです', '#e67e22', 2000);
+    return;
+  }
+  if (isSendNowPressed) {
+    showNotif('⏳ 処理中です。しばらくお待ちください', '#888', 2000);
+    return;
+  }
+  isSendNowPressed = true;
+  _pasteOnlyMode = true;
+  showNotif('⏳ メッセージを準備しています...', '#3498db', 15000);
+  (async () => {
+    const states = await csGet();
+    const cp = location.pathname.replace(/\/$/, '');
+    const st = states[cp];
+    if (!st || st.stage === 0) {
+      await sendFirstMessage();
+    } else {
+      await executeStageForCurrentChat();
+    }
+  })().finally(() => { isSendNowPressed = false; _pasteOnlyMode = false; });
+}
+
 function initExtensionClickGuard() {
   if (window.__hgClickGuard) return;
   window.__hgClickGuard = true;
+
+  const EXT_SEL = '#hg-send-now, #hg-float-stop, #hg-reply-panel, #hg-match-reset';
+
+  // touchstart: 東カレSPAのタッチナビゲーションを先にブロック
+  window.addEventListener('touchstart', (e) => {
+    if (!e.target.closest(EXT_SEL)) return;
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
+
+  // touchend: アクション実行 + 合成clickをキャンセル（mobile emulation対応）
+  window.addEventListener('touchend', (e) => {
+    if (!e.target.closest(EXT_SEL)) return;
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    if (e.target.closest('#hg-send-now')) { handleSendNowPress(e.target); return; }
+    if (e.target.closest('#hg-float-stop')) { stopAll(); return; }
+    if (e.target.closest('#hg-match-reset')) {
+      if (!confirm('会話ステートを全消しします。よいですか？')) return;
+      chrome.storage.local.remove('conversationStates', () => {
+        showNotif('✅ ステートリセット完了', '#27ae60', 3000);
+      });
+      return;
+    }
+  }, { capture: true, passive: false });
+
   window.addEventListener('click', (e) => {
-    const withinExt = e.target.closest(
-      '#hg-match-panel, #hg-send-now, #hg-float-stop, #hg-reply-panel'
-    );
+    const withinExt = e.target.closest(EXT_SEL);
     if (!withinExt) return;
     e.stopPropagation();
     e.stopImmediatePropagation();
 
     // 今すぐ送信
     if (e.target.closest('#hg-send-now')) {
-      if (parseFloat(e.target.closest('#hg-send-now').style.opacity) < 1) {
-        showNotif('このチャットは追跡対象外です', '#e67e22', 2000);
-        return;
-      }
-      isSendNowPressed = true;
-      executeStageForCurrentChat().finally(() => { isSendNowPressed = false; });
-      return;
-    }
-
-    // 一斉送信を起動
-    if (e.target.closest('#hg-match-send')) {
-      handleScheduledBatchSend().catch(() => {});
-      return;
-    }
-
-    // 停止
-    if (e.target.closest('#hg-match-stop')) {
-      Promise.all([localSet({ checkQueue: [], batchQueue: [], selectedForBatch: [] })])
-        .then(() => {
-          document.querySelectorAll('.hg-match-cb:checked').forEach((cb) => { cb.checked = false; });
-          const ce = document.getElementById('hg-match-count');
-          if (ce) ce.textContent = `マッチ ${document.querySelectorAll('.hg-match-cb').length}件`;
-          showNotif('⏹ 一斉送信を停止しました', '#7f8c8d', 3000);
-        }).catch(() => {});
+      handleSendNowPress(e.target);
       return;
     }
 
@@ -2060,6 +2257,16 @@ function initExtensionClickGuard() {
       stopAll();
       return;
     }
+
+    // ステートリセットボタン
+    if (e.target.closest('#hg-match-reset')) {
+      if (!confirm('会話ステート（conversationStates）を全消しします。\n追跡中の全ユーザーのステージがリセットされます。よいですか？')) return;
+      chrome.storage.local.remove('conversationStates', () => {
+        showNotif('✅ ステートリセット完了', '#27ae60', 3000);
+      });
+      return;
+    }
+
     // チェックボックス — change イベントはブラウザデフォルト動作で発火するので放置
   }, true); // capture phase = 東カレより先にフック
 }
@@ -2071,7 +2278,32 @@ function initExtensionClickGuard() {
 async function init() {
   initExtensionClickGuard();
   injectFloatingStopButton();
-  if (isListPage()) setTimeout(injectPriorityScores, 1000);
+  if (isListPage()) {
+    setTimeout(injectPriorityScores, 1000);
+    // /search/list/ID = staleチャットへのリダイレクト → 自動スキップ
+    const pathId = location.pathname.split('/').filter(Boolean).pop();
+    if (pathId && /^\d+$/.test(pathId)) {
+      const stalePath = '/friend/chat/' + pathId;
+      const { checkQueue = [] } = await localGet('checkQueue');
+      if (checkQueue.includes(stalePath)) {
+        await csUpdate(stalePath, { active: false });
+        const remaining = checkQueue.filter((p) => p !== stalePath);
+        await localSet({ checkQueue: remaining });
+        if (remaining.length > 0) {
+          showNotif('⏭ 無効チャット → 次へ', '#e67e22', 2000);
+          setTimeout(() => { location.href = remaining[0]; }, 1500);
+        } else {
+          const { batchQueue = [] } = await localGet('batchQueue');
+          if (batchQueue.length > 0) {
+            showNotif('⏭ 無効チャット → 初回送信へ', '#e67e22', 2000);
+            setTimeout(() => { location.href = batchQueue[0].path; }, 1500);
+          } else {
+            showNotif('✅ 一斉送信完了（無効チャットを除外）', '#27ae60', 3000);
+          }
+        }
+      }
+    }
+  }
   if (isFriendIndexPage()) {
     injectMatchSelector();
   }
@@ -2084,25 +2316,31 @@ async function init() {
       csGet(),
     ]);
     let state = states[chatPath];
+    const isInBatchQueue = batchQueue.some((item) => item.path === chatPath);
 
-    // 未追跡チャットへの手動アクセス時のみスカウト返信を検出
-    if ((!state?.stage) && !batchQueue.some((i) => i.path === chatPath) && !checkQueue.includes(chatPath)) {
+    // バッチ経由の訪問は sendFirstMessage 内部で処理するため detectAndSetScoutReply をスキップ
+    // （先にstage=1を書くと sendFirstMessage が stage>=1 でスキップしてしまう）
+    if (!state?.stage && !isInBatchQueue) {
       const detected = await detectAndSetScoutReply(chatPath);
       if (detected) state = (await csGet())[chatPath];
     }
 
-    if (batchQueue.some((item) => item.path === chatPath)) {
+    if (isInBatchQueue) {
       setTimeout(() => sendFirstMessage(), 1800);
     } else if (checkQueue.includes(chatPath)) {
       // Hotwire/Stimulus完全初期化を待つため2500msに延長
       setTimeout(() => {
-        executeStageForCurrentChat().then(() => advanceCheckQueue()).catch(() => {});
+        executeStageForCurrentChat()
+          .catch((err) => console.error('[東カレ] executeStage error:', err))
+          .finally(() => advanceCheckQueue())
+          .catch((err) => console.error('[東カレ] advanceCheckQueue error:', err));
       }, 2500);
     }
     // ※ 手動アクセス時は executeStageForCurrentChat() を呼ばない
     // 送信は 一斉送信ボタン（checkQueue経由）または 今すぐ送信ボタン のみ
 
     injectSendNowButton().catch(() => {});
+    injectChatLayoutFix();
   }
 
   // ページ遷移後も自動いいね・足跡・スカウトを継続
@@ -2126,9 +2364,52 @@ async function init() {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       if (isLoginPage() && isRunning) stopAll('ログインページへリダイレクトされました');
-      setTimeout(() => {
-        if (isConversationPage()) injectSendNowButton().catch(() => {});
-        if (isListPage()) injectPriorityScores();
+      setTimeout(async () => {
+        if (isConversationPage()) {
+          injectSendNowButton().catch(() => {});
+          injectChatLayoutFix();
+          // Turbo SPA対応: URL変化後にbatchQueue/checkQueueを処理
+          const chatPath = location.pathname.replace(/\/$/, '');
+          const [{ batchQueue = [] }, { checkQueue = [] }] = await Promise.all([
+            localGet('batchQueue'), localGet('checkQueue'),
+          ]);
+          if (batchQueue.some((item) => item.path === chatPath)) {
+            setTimeout(() => sendFirstMessage(), 1800);
+          } else if (checkQueue.includes(chatPath)) {
+            setTimeout(() => {
+              executeStageForCurrentChat()
+                .catch((err) => console.error('[東カレ] executeStage error:', err))
+                .finally(() => advanceCheckQueue())
+                .catch((err) => console.error('[東カレ] advanceCheckQueue error:', err));
+            }, 2500);
+          }
+        }
+        if (isListPage()) {
+          injectPriorityScores();
+          // /search/list/ID = staleチャットへのリダイレクト → 自動スキップ（Turbo時）
+          const pathId = location.pathname.split('/').filter(Boolean).pop();
+          if (pathId && /^\d+$/.test(pathId)) {
+            const stalePath = '/friend/chat/' + pathId;
+            const { checkQueue = [] } = await localGet('checkQueue');
+            if (checkQueue.includes(stalePath)) {
+              await csUpdate(stalePath, { active: false });
+              const remaining = checkQueue.filter((p) => p !== stalePath);
+              await localSet({ checkQueue: remaining });
+              if (remaining.length > 0) {
+                showNotif('⏭ 無効チャット → 次へ', '#e67e22', 2000);
+                setTimeout(() => { location.href = remaining[0]; }, 1500);
+              } else {
+                const { batchQueue = [] } = await localGet('batchQueue');
+                if (batchQueue.length > 0) {
+                  showNotif('⏭ 無効チャット → 初回送信へ', '#e67e22', 2000);
+                  setTimeout(() => { location.href = batchQueue[0].path; }, 1500);
+                } else {
+                  showNotif('✅ 一斉送信完了（無効チャットを除外）', '#27ae60', 3000);
+                }
+              }
+            }
+          }
+        }
         if (isFriendIndexPage()) injectMatchSelector();
       }, 800);
     } else if (isListPage()) {

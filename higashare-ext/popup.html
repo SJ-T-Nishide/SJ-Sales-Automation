@@ -6,7 +6,10 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <h1>東カレデート自動化</h1>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+    <h1 style="margin:0;">東カレデート自動化</h1>
+    <button id="popoutBtn" title="別ウィンドウで開く" style="background:none;border:1px solid #aaa;border-radius:4px;padding:2px 6px;font-size:14px;cursor:pointer;color:#555;">⧉</button>
+  </div>
 
   <!-- ワンクリック起動 -->
   <button id="openMobileBtn" class="btn-open-mobile">📱 東カレをモバイルで開く</button>
@@ -42,6 +45,24 @@
       <button id="stopScoutBtn"  class="btn-stop" disabled>⏹ 停止</button>
     </div>
     <div id="scoutStatus" class="like-status"></div>
+  </section>
+
+  <!-- マッチ送信操作 -->
+  <section class="like-section" id="matchSection">
+    <div style="font-size:11px;font-weight:bold;color:#2c3e50;margin-bottom:4px;">マッチ送信</div>
+    <div id="matchCount" style="font-size:11px;color:#888;margin-bottom:6px;">-</div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px;">
+      <button id="selectAllBtn"   style="padding:4px 8px;font-size:11px;background:#27ae60;color:#fff;border:none;border-radius:4px;cursor:pointer;">☑ 全選択</button>
+      <button id="deselectAllBtn" style="padding:4px 8px;font-size:11px;background:#95a5a6;color:#fff;border:none;border-radius:4px;cursor:pointer;">☐ 全解除</button>
+      <button id="genCandidatesBtn" style="padding:4px 8px;font-size:11px;background:#2980b9;color:#fff;border:none;border-radius:4px;cursor:pointer;">📝 生成</button>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;">
+      <button id="matchFullBatchBtn"    style="padding:4px 8px;font-size:11px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">⚡ 全体送信</button>
+      <button id="matchCheckedBatchBtn" style="padding:4px 8px;font-size:11px;background:#8e44ad;color:#fff;border:none;border-radius:4px;cursor:pointer;">✅ 選択のみ送信</button>
+      <button id="matchBatchStopBtn"    style="padding:4px 8px;font-size:11px;background:#7f8c8d;color:#fff;border:none;border-radius:4px;cursor:pointer;">⏹ 停止</button>
+      <button id="matchResetBtn"        style="padding:4px 8px;font-size:11px;background:#c0392b;color:#fff;border:none;border-radius:4px;cursor:pointer;">🗑️ リセット</button>
+    </div>
+    <div id="matchMsg" style="font-size:11px;min-height:14px;margin-top:4px;"></div>
   </section>
 
   <hr>
@@ -179,54 +200,57 @@
         <b>【こちらから先に送る場合】</b><br>
         ① 初回メッセージ → 相手の返信 → ② 2回目 → 返信N回 → ③ アポ打診<br><br>
         <b>【相手から先にメッセージが届いている場合】</b><br>
-        ① 返信（インバウンド用プロンプト）→ <b>3分後に自動でアポ打診（③のプロンプト使用）</b>
+        ① 返信（インバウンド用プロンプト）→ <b>5秒後に自動でアポ打診（③のプロンプト使用）</b>
       </div>
     </details>
     <label>① 初回メッセージ【こちらから送る場合】（複数バリエーションは --- で区切る）
       <textarea id="msg1Template" rows="4" placeholder="バリエーション1のプロンプト&#10;---&#10;バリエーション2のプロンプト"></textarea>
     </label>
-    <label>① 初回メッセージ【相手から先にメッセージが届いている場合】
-      <textarea id="msg1InboundTemplate" rows="3" placeholder="例: 相手から届いたメッセージに自然に反応しながら、プロフィールへの興味や共通点に触れて返信してください。3〜4文。タメ口。"></textarea>
+    <label>① 初回メッセージ【相手から先にメッセージが届いている場合】（複数バリエーションは --- で区切る）
+      <textarea id="msg1InboundTemplate" rows="3" placeholder="バリエーション1のプロンプト&#10;---&#10;バリエーション2のプロンプト"></textarea>
     </label>
-    <label>② 2回目メッセージ（相手から最初の返信後）
-      <textarea id="msg2Template" rows="3" placeholder="例: 相手の返信に自然に反応しつつ、相手のことをもっと知りたいという気持ちを伝える返信を書いてください。2〜3文。"></textarea>
+    <label>② 2回目メッセージ（相手から最初の返信後）（複数バリエーションは --- で区切る）
+      <textarea id="msg2Template" rows="3" placeholder="バリエーション1のプロンプト&#10;---&#10;バリエーション2のプロンプト"></textarea>
     </label>
-    <label>③ アポ打診【こちらから先に送った場合】1通目（[名前]で名前置換）
+    <label>③ アポ打診【こちらから先に送った場合】1通目（[名前]で名前置換・複数バリエーションは --- で区切る）
       <textarea id="apoMsg1Template" rows="3" placeholder="[名前]ちゃん、覚えました。&#10;&#10;うれしいです！&#10;&#10;ちなみに見た目だけじゃなくて、上手く言えないんですが纏ってる雰囲気がすごく好きです笑"></textarea>
     </label>
-    <label>③ アポ打診【こちらから先に送った場合】2通目（[名前]で名前置換）
+    <label>③ アポ打診【こちらから先に送った場合】2通目（[名前]で名前置換・複数バリエーションは --- で区切る）
       <textarea id="apoMsg2Template" rows="4" placeholder="早いとは思うんですが、会ったことない人とメッセージするのが苦手で。&#10;良かったら近いうちにご飯いきませんか？&#10;&#10;[名前]ちゃん、すごく会ってみたいです。&#10;&#10;もちろん抵抗があったらカフェとか電話とかでも大丈夫ですので！&#10;&#10;返事待ってます。"></textarea>
     </label>
-    <label>③ アポ打診【相手から先にメッセージが届いていた場合】（[名前]で名前置換）
+    <label>③ アポ打診【相手から先にメッセージが届いていた場合】（[名前]で名前置換・複数バリエーションは --- で区切る）
       <textarea id="inboundApoTemplate" rows="4" placeholder="早いとは思うんですが、会ったことない人とメッセージするのが苦手で。&#10;良かったら近いうちにご飯いきませんか？&#10;&#10;[名前]ちゃん、雰囲気がすごく好きで会ってみたいです。&#10;&#10;もちろん抵抗があったらカフェとか電話とかでも大丈夫ですので！&#10;&#10;返事待ってます。"></textarea>
     </label>
 
     <div class="section-title">アポ承認後 返信テンプレート</div>
     <div style="font-size:11px;color:#888;margin-bottom:6px;">※ 日程候補は空き日程登録から自動挿入。LINE URLは下欄から。<br>※ Part2に <b>{slot_header}</b> と書くと、空き日程ありの場合のみ「このあたり空いてます！」を自動挿入（なし時は空欄）。</div>
 
-    <label>【ランチ/ディナー承認】Part1（日程の前に送るテキスト）
+    <label>【ランチ/ディナー承認】Part1（複数バリエーションは --- で区切る）
       <textarea id="apoMealPart1" rows="2" placeholder="うれしいです！是非行きましょう。&#10;楽しみ！"></textarea>
     </label>
-    <label>【ランチ/ディナー承認】Part2（LINE誘導テキスト）
+    <label>【ランチ/ディナー承認】Part2（LINE誘導テキスト・複数バリエーションは --- で区切る）
       <textarea id="apoMealPart2" rows="3" placeholder="{slot_header}よかったらLINEで店決めたり予定たてませんか？&#10;ラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ！"></textarea>
     </label>
 
-    <label>【カフェ/お茶承認】Part1
+    <label>【カフェ/お茶承認】Part1（複数バリエーションは --- で区切る）
       <textarea id="apoCafePart1" rows="2" placeholder="うれしいです！是非行きましょう。&#10;楽しみ！"></textarea>
     </label>
-    <label>【カフェ/お茶承認】Part2（LINE誘導テキスト）
+    <label>【カフェ/お茶承認】Part2（LINE誘導テキスト・複数バリエーションは --- で区切る）
       <textarea id="apoCafePart2" rows="3" placeholder="{slot_header}よかったらLINEで店決めたり予定たてませんか？&#10;ラインだと絶対気付けるんですが、このままが良ければ大丈夫ですよ。"></textarea>
     </label>
 
-    <label>【電話承認】Part1
+    <label>【電話承認】Part1（複数バリエーションは --- で区切る）
       <textarea id="apoPhonePart1" rows="2" placeholder="電話ありです！是非しましょう。"></textarea>
     </label>
-    <label>【電話承認】Part2（LINE誘導テキスト）
+    <label>【電話承認】Part2（LINE誘導テキスト・複数バリエーションは --- で区切る）
       <textarea id="apoPhonePart2" rows="3" placeholder="{slot_header}LINE電話でもいいですか？&#10;これLINEの友達追加のやつです。&#10;&#10;このままが良ければそれでもOKです！"></textarea>
     </label>
 
     <label>LINE招待URL（各ケースのPart2末尾に自動挿入）
       <input type="text" id="lineTemplate" placeholder="https://line.me/ti/p/xxxxx">
+    </label>
+    <label>LINE承認後メッセージ（承認判定後にURLの前に送るテキスト・空欄ならURLのみ送信）
+      <textarea id="lineApprovedTemplate" rows="2" placeholder="ありがとうございます！&#10;よかったら追加してください。"></textarea>
     </label>
     <label>アポ打診まで（相手の返信が何回来たら③を送るか）
       <input type="number" id="apoTriggerCount" value="3" min="1" max="20">
@@ -243,10 +267,6 @@
     <div style="font-size:12px;color:#888;margin:4px 0 6px;">送信時刻（複数設定可・0件でスケジュールなし）<br>※ 初回送信・返信・アポ打診すべてに適用</div>
     <div id="batchTimesContainer"></div>
     <button type="button" id="addBatchTimeBtn" style="margin:4px 0 2px;padding:4px 12px;font-size:12px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;">＋ 時刻を追加</button>
-    <div style="display:flex;gap:6px;margin:6px 0 2px;">
-      <button type="button" id="triggerBatchNowBtn" style="padding:4px 12px;font-size:12px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;">⚡ 今すぐ一斉送信を起動</button>
-      <button type="button" id="stopBatchNowBtn" style="padding:4px 12px;font-size:12px;background:#7f8c8d;color:#fff;border:none;border-radius:4px;cursor:pointer;">⏹ 停止</button>
-    </div>
     <div style="font-size:11px;color:#aaa;margin-top:4px;">※ 設定した時刻に東カレを開いていると自動で初回送信が始まります</div>
 
     <button id="saveBtn">保存</button>

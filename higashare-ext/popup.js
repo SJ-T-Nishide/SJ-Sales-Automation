@@ -104,7 +104,7 @@ function renderSettingsForm(pattern) {
   // 自動メッセージテンプレート
   const tmplFields = ['msg1Template', 'msg1InboundTemplate', 'msg2Template', 'apoMsg1Template', 'apoMsg2Template', 'inboundApoTemplate',
     'apoMealPart1', 'apoMealPart2', 'apoCafePart1', 'apoCafePart2', 'apoPhonePart1', 'apoPhonePart2',
-    'lineTemplate'];
+    'lineTemplate', 'lineApprovedTemplate'];
   for (const f of tmplFields) {
     const el = document.getElementById(f);
     if (el) el.value = pattern[f] || '';
@@ -332,9 +332,15 @@ document.getElementById('resetStatsBtn').addEventListener('click', async () => {
 // ---- いいね開始/停止 ----
 
 async function sendToActiveTab(message) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({ url: 'https://tokyo-calendar-date.jp/*' });
+  const tab = tabs[0];
   if (tab?.id) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
 }
+
+document.getElementById('popoutBtn').addEventListener('click', () => {
+  chrome.windows.create({ url: chrome.runtime.getURL('popup.html'), type: 'popup', width: 440, height: 700 });
+  window.close();
+});
 
 document.getElementById('startLikeBtn').addEventListener('click', async () => {
   const { settings = {} } = await localGet('settings');
@@ -488,7 +494,8 @@ async function collectAndSave(showFeedback = false) {
     pattern.apoCafePart2    = document.getElementById('apoCafePart2').value;
     pattern.apoPhonePart1   = document.getElementById('apoPhonePart1').value;
     pattern.apoPhonePart2   = document.getElementById('apoPhonePart2').value;
-    pattern.lineTemplate    = document.getElementById('lineTemplate').value;
+    pattern.lineTemplate         = document.getElementById('lineTemplate').value;
+    pattern.lineApprovedTemplate = document.getElementById('lineApprovedTemplate').value;
     pattern.apoTriggerCount = Number(document.getElementById('apoTriggerCount').value) || 3;
     pattern.msg1InboundTemplate = document.getElementById('msg1InboundTemplate').value;
     pattern.scoutMsgTemplate    = document.getElementById('scoutMsgTemplate').value;
@@ -529,7 +536,7 @@ function scheduleAutoSave() {
   'maxLikesPerRun', 'maxLikesDaily', 'excludeAge',
   'msg1Template', 'msg2Template', 'apoMsg1Template', 'apoMsg2Template', 'inboundApoTemplate',
   'apoMealPart1', 'apoMealPart2', 'apoCafePart1', 'apoCafePart2', 'apoPhonePart1', 'apoPhonePart2',
-  'lineTemplate', 'apoTriggerCount',
+  'lineTemplate', 'lineApprovedTemplate', 'apoTriggerCount',
   'msg1InboundTemplate',
   'scoutMsgTemplate', 'maxScoutPerRun', 'maxScoutDaily',
 ].forEach((id) => {
@@ -538,32 +545,75 @@ function scheduleAutoSave() {
 });
 document.getElementById('excludeJobs').addEventListener('change', scheduleAutoSave);
 
-// ---- 今すぐ一斉送信ボタン ----
+// ---- マッチ送信操作ボタン ----
 
-document.getElementById('triggerBatchNowBtn').addEventListener('click', async () => {
+async function getHigashareTab() {
   const [tab] = await chrome.tabs.query({ url: 'https://tokyo-calendar-date.jp/*' });
-  if (!tab) {
-    alert('東カレのタブを開いてから押してください');
-    return;
-  }
-  chrome.tabs.sendMessage(tab.id, { action: 'startBatchSend' });
-  const msg = document.getElementById('saveMsg');
-  msg.style.color = '#27ae60';
-  msg.textContent = '一斉送信を起動しました ✓';
-  setTimeout(() => { msg.textContent = ''; }, 3000);
+  return tab || null;
+}
+
+function showMatchMsg(text, color = '#27ae60') {
+  const el = document.getElementById('matchMsg');
+  if (!el) return;
+  el.style.color = color;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+async function initMatchCount() {
+  const { selectedPaths = [] } = await chrome.storage.local.get('selectedPaths');
+  const el = document.getElementById('matchCount');
+  if (el) el.textContent = selectedPaths.length > 0 ? `${selectedPaths.length}件選択中` : '選択なし';
+}
+
+initMatchCount();
+
+document.getElementById('selectAllBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
+  if (!tab) { showMatchMsg('東カレの友達一覧を開いてください', '#e74c3c'); return; }
+  chrome.tabs.sendMessage(tab.id, { action: 'selectAllMatches' }).catch(() => {});
 });
 
-document.getElementById('stopBatchNowBtn').addEventListener('click', async () => {
-  const [tab] = await chrome.tabs.query({ url: 'https://tokyo-calendar-date.jp/*' });
+document.getElementById('deselectAllBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
+  if (!tab) { showMatchMsg('東カレの友達一覧を開いてください', '#e74c3c'); return; }
+  chrome.tabs.sendMessage(tab.id, { action: 'deselectAllMatches' }).catch(() => {});
+});
+
+document.getElementById('genCandidatesBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
+  if (!tab) { showMatchMsg('東カレのタブを開いてください', '#e74c3c'); return; }
+  chrome.tabs.sendMessage(tab.id, { action: 'genCandidatesFromPopup' }).catch(() => {});
+  window.close();
+});
+
+document.getElementById('matchFullBatchBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
+  if (!tab) { showMatchMsg('東カレのタブを開いてください', '#e74c3c'); return; }
+  chrome.tabs.sendMessage(tab.id, { action: 'startFullBatchSend' }).catch(() => {});
+  showMatchMsg('⚡ 全体送信を起動しました ✓');
+});
+
+document.getElementById('matchCheckedBatchBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
+  if (!tab) { showMatchMsg('東カレのタブを開いてください', '#e74c3c'); return; }
+  chrome.tabs.sendMessage(tab.id, { action: 'startBatchSend' }).catch(() => {});
+  showMatchMsg('✅ 選択のみ送信を起動しました ✓', '#8e44ad');
+});
+
+document.getElementById('matchBatchStopBtn').addEventListener('click', async () => {
+  const tab = await getHigashareTab();
   if (tab) chrome.tabs.sendMessage(tab.id, { action: 'stopBatchSend' }).catch(() => {});
-  // キューをストレージから直接クリア（タブが反応しなくても効く）
-  await Promise.all([
-    chrome.storage.local.set({ checkQueue: [], batchQueue: [] }),
-  ]);
-  const msg = document.getElementById('saveMsg');
-  msg.style.color = '#e67e22';
-  msg.textContent = '一斉送信を停止しました';
-  setTimeout(() => { msg.textContent = ''; }, 3000);
+  await chrome.storage.local.set({ checkQueue: [], batchQueue: [], queueNavTarget: null, selectedPaths: [] });
+  showMatchMsg('一斉送信を停止しました', '#e67e22');
+  const el = document.getElementById('matchCount');
+  if (el) el.textContent = '選択なし';
+});
+
+document.getElementById('matchResetBtn').addEventListener('click', async () => {
+  if (!confirm('conversationStates（追跡データ）を全消しします。よいですか？')) return;
+  await chrome.storage.local.remove('conversationStates');
+  showMatchMsg('✅ ステートリセット完了');
 });
 
 // ---- スケジュール時刻追加ボタン ----
@@ -721,5 +771,14 @@ chrome.runtime.onMessage.addListener((message) => {
       const pattern = patterns.find((p) => p.id === activeId);
       if (pattern) renderStats(pattern);
     })();
+  }
+  if (message.action === 'matchCountUpdate') {
+    const el = document.getElementById('matchCount');
+    if (!el) return;
+    if (message.checked > 0) {
+      el.textContent = `${message.checked}件選択中 / 全${message.total}件`;
+    } else {
+      el.textContent = `全${message.total}件`;
+    }
   }
 });

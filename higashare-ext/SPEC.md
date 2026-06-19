@@ -337,6 +337,14 @@ function getConversationHistory() {
 - checkQueue 完了後に処理開始
 - 各会話を訪問 → `sendFirstMessage()` → `batchAdvance()` → 次へ
 
+### 処理順序（重要）
+
+**checkQueue（追跡中 stage1-3）→ 完了後 → batchQueue（チェック済み stage0）**
+
+- 一斉送信は **両キューを必ずセット** する（片方が空でも問題なし）
+- `advanceCheckQueue()` がcheckQueue完了後にbatchQueueへ継続する
+- `batchAdvance()` がbatchQueue完了後に「一斉送信完了」を表示
+
 ### handleScheduledBatchSend() の処理
 
 ```javascript
@@ -347,12 +355,12 @@ async function handleScheduledBatchSend() {
     localSet({ scoutRunning: false, autoLikeRunning: false, footprintRunning: false }),
   ]);
 
-  // checkQueue: 全 stage 1-3 の active な会話
+  // checkQueue: 全 stage 1-3 の active な会話（必ずセット）
   const replyPaths = Object.entries(states)
     .filter(([, s]) => s.stage >= 1 && s.stage <= 3 && s.active !== false)
     .map(([path]) => path);
 
-  // batchQueue: selectedForBatch の中で stage=0 のもの
+  // batchQueue: selectedForBatch の中で stage=0 のもの（必ずセット）
   const firstQueue = selectedForBatch
     .filter((path) => (states[path]?.stage ?? 0) === 0)
     .map((path) => ({ path, name: path.split('/').pop() }));
@@ -360,14 +368,36 @@ async function handleScheduledBatchSend() {
   // 対象なし → 通知して終了
   if (replyPaths.length === 0 && firstQueue.length === 0) { ... return; }
 
-  // checkQueue → batchQueue の順に処理開始
-  if (replyPaths.length > 0) {
-    location.href = replyPaths[0];    // checkQueue 先頭へ遷移
+  // 両キューをセット（どちらが空でも可）
+  await Promise.all([
+    localSet({ checkQueue: replyPaths }),
+    localSet({ batchQueue: firstQueue }),
+  ]);
+
+  // checkQueueが空の場合はbatchQueueから開始
+  const targetPath = replyPaths.length > 0 ? replyPaths[0] : firstQueue[0].path;
+  navigateTo(targetPath);
+}
+```
+
+### ナビゲーションヘルパー（navigateTo）
+
+東カレはTurbo SPAのため `location.href` 直接代入が無視される場合がある。
+
+```javascript
+function navigateTo(path) {
+  const url = path.startsWith('http') ? path : 'https://tokyo-calendar-date.jp' + path;
+  if (window.Turbo?.visit) {
+    window.Turbo.visit(url);
   } else {
-    location.href = firstQueue[0].path; // batchQueue 先頭へ遷移
+    const link = document.querySelector(`a[href="${path}"], a[href="${url}"]`);
+    if (link) link.click();
+    else location.assign(url);
   }
 }
 ```
+
+全キュー遷移（advanceCheckQueue / batchAdvance）はこのヘルパーを使用する。
 
 ### 友達一覧ボタン（injectMatchSelector）
 
@@ -920,3 +950,29 @@ const sendApoNow = checkQueue.includes(chatPath) || isSendNowPressed;
 **[サイレントreturn修正]**
 - `opponentCount <= replyCount` の早期 return で「新しい返信待ち（相手の返信後に自動送信）」を表示
 - 旧: 何も表示せずに return していたため「反応しない」に見えた
+
+---
+
+### 2026-06-17（セッション3: アーキテクチャバグ修正・navigateTo追加）
+
+**[CRITICAL] 一斉送信が追跡中ユーザーを処理しないバグを修正**
+- 原因: `handleScheduledBatchSend()` で `checkQueue: firstQueue.length > 0 ? [] : replyPaths` と書いてしまい、batchQueue（チェック済みstage0）がある場合にcheckQueue（追跡中stage1-3）が空になっていた
+- 正しい仕様: 一斉送信は **追跡中ユーザー（stage1-3）とチェック済みユーザー（stage0）の両方** を処理する
+- 修正: `checkQueue: replyPaths`（常にセット）に変更
+
+**[navigateTo] Turbo SPA対応ナビゲーションヘルパー追加**
+- 東カレはHotwire/Turbo SPAのため `location.href` 直接代入がルーターに無視される場合がある
+- `navigateTo(path)` を追加: `Turbo.visit(url)` → `a.click()` → `location.assign(url)` の優先順
+- `advanceCheckQueue()` / `batchAdvance()` / `handleScheduledBatchSend()` / `checkReplies` アクションの全遷移箇所を `navigateTo()` に統一
+
+**[📝 生成ボタン] candidates.html 連携を追加**
+- 友達一覧の「📝 生成」ボタン: チェック済みstage0ユーザーのメッセージ候補をClaudeで一括生成
+- `candidatesJob` に保存 → `candidates.html` を別タブで開く（`background.js` の `openCandidates` アクション経由）
+- 承認後: `batchQueue` に `{path, name, approvedText}` として保存 → 一斉送信で `approvedText` を直接送信
+
+**[スカウト返信] 検出ロジック修正**
+- 旧: `scoutSentUserIds`（DOM IDベース）で判定 → ID不一致で誤検出
+- 新: `getConversationHistory()` で `自分:` のメッセージが存在 かつ 相手返信ありで判定
+
+**[二重送信防止] `sendFirstMessage()` にstageガード追加**
+- `stage >= 1` の場合は即スキップして `batchAdvance()` に進む

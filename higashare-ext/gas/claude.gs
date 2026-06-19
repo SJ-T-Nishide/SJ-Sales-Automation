@@ -134,19 +134,57 @@ function extractOpponentName(body) {
   if (!apiKey) return { success: false, error: 'CLAUDE_API_KEY not set' };
 
   var systemPrompt =
-    '会話履歴を読み、「相手」が自分の名前を名乗っているか確認してください。\n' +
-    '名乗っている場合は名前のみを返してください（例: ひかり）。\n' +
-    '名乗っていない場合は空文字のみを返してください。\n' +
-    '説明・前置き・記号一切不要。名前または空文字のみ。';
+    '以下の会話履歴から「相手」（女性）のファーストネームを抽出してください。\n\n' +
+    '【会話の形式】\n' +
+    '「相手:」で始まる行 = 女性の発言\n' +
+    '「自分:」で始まる行 = あなたの発言（無視してよい）\n\n' +
+    '【名乗りパターン例】\n' +
+    '「さくらって言います」「ひかりです」「みことだよ」「ゆいでーす笑」\n' +
+    '「私はなな」「まなって呼んで」「みく！よろしく」「〜といいます」\n\n' +
+    '【抽出ルール】\n' +
+    '- ファーストネームのみ（苗字は不要）\n' +
+    '- 「〜さん」「〜ちゃん」等の敬称は除いて名前だけ返す\n' +
+    '- ひらがな・カタカナ・漢字どれでも可\n' +
+    '- 複数箇所で名乗っている場合は最初の名前を採用\n' +
+    '- 名前が見つからない・不明確な場合は空文字を返す\n\n' +
+    '【出力】名前のみ（例: ひかり）または空文字。説明・記号・改行一切不要。';
 
-  var name = callClaudeOnce(apiKey, systemPrompt, body.conversationSummary || '', 20);
+  var name = callClaudeOnce(apiKey, systemPrompt, body.conversationSummary || '', 30);
   return { success: true, name: name.trim() };
 }
 
-// アポ返答判定
+// アポ返答判定 / LINE承認判定（context: 'line' の場合）
 function judgeApoResponse(body) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('CLAUDE_API_KEY');
   if (!apiKey) return { success: false, error: 'CLAUDE_API_KEY not set' };
+
+  // LINE承認判定モード
+  if (body.context === 'line') {
+    var lineSystemPrompt =
+      'あなたはマッチングアプリのLINE交換提案への返答を判定する専門家です。\n' +
+      '「自分」がLINEでやりとりしませんかと提案し、「相手（女性）」が返答しています。\n' +
+      '会話の末尾が「自分」の発言で終わっている場合は必ず「unclear」を返してください。\n\n' +
+      '判定基準：\n' +
+      '- approved: 相手がLINE交換・LINE追加・LINEでのやりとりを明確に承諾した\n' +
+      '  （例：「いいですよ」「追加します」「LINE教えて」「送って」「了解」）\n' +
+      '- unclear: 相手が曖昧・別の話題・断り・まだ返答していない\n\n' +
+      '必ず以下のJSON形式のみで回答。説明・前置き不要：\n' +
+      '{"result":"approved","reason":"理由30文字以内"}\n' +
+      '{"result":"unclear","reason":"理由30文字以内"}';
+
+    var lineUserPrompt = '以下の会話を分析し、LINE交換の承諾判定をしてください：\n\n' +
+      (body.conversationSummary || '');
+    var lineRaw = callClaudeOnce(apiKey, lineSystemPrompt, lineUserPrompt);
+    try {
+      var lineMatch = lineRaw.match(/\{[^}]+\}/);
+      if (!lineMatch) throw new Error('JSON not found');
+      var lineParsed = JSON.parse(lineMatch[0]);
+      if (!['approved', 'unclear'].includes(lineParsed.result)) throw new Error('Invalid result');
+      return { success: true, result: lineParsed.result, reason: lineParsed.reason || '' };
+    } catch (e) {
+      return { success: true, result: 'unclear', reason: '判定失敗' };
+    }
+  }
 
   var systemPrompt =
     'あなたはマッチングアプリのデートのお誘いへの「相手（女性）」の返答を判定する専門家です。\n' +

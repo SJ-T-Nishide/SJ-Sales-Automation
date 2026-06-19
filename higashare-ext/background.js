@@ -60,15 +60,22 @@ function localSet(obj) {
 
 // ---- メッセージハンドラ ----
 
+// MV3サービスワーカーは30秒で終了する。長いGAS呼び出し中にSWが落ちると
+// "message channel closed" エラーになる。25秒ごとにstorage.getを呼んでSWを生かし続ける。
+function withKeepAlive(fn) {
+  const timer = setInterval(() => chrome.storage.local.get('__noop__', () => {}), 25000);
+  return fn().finally(() => clearInterval(timer));
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.action) {
 
     case 'generateCandidates':
-      handleGenerate(message).then(sendResponse).catch((e) => sendResponse({ error: e.message }));
+      withKeepAlive(() => handleGenerate(message)).then(sendResponse).catch((e) => sendResponse({ error: e.message }));
       return true;
 
     case 'fetchCalendarSlots':
-      callGAS('calendar', {}, 'GET').then(sendResponse).catch((e) => sendResponse({ error: e.message }));
+      withKeepAlive(() => callGAS('calendar', {}, 'GET')).then(sendResponse).catch((e) => sendResponse({ error: e.message }));
       return true;
 
     case 'logEvent':
@@ -77,17 +84,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'runAnalysis':
-      callGAS('generate', { ...message.payload, type: 'analysis' })
+      withKeepAlive(() => callGAS('generate', { ...message.payload, type: 'analysis' }))
         .then(sendResponse).catch((e) => sendResponse({ error: e.message }));
       return true;
 
     case 'judgeApo':
-      callGAS('judge', message.payload)
+      withKeepAlive(() => callGAS('judge', message.payload))
         .then(sendResponse).catch((e) => sendResponse({ error: e.message }));
       return true;
 
     case 'extractName':
-      callGAS('extractName', message.payload)
+      withKeepAlive(() => callGAS('extractName', message.payload))
         .then(sendResponse).catch((e) => sendResponse({ error: e.message }));
       return true;
 
