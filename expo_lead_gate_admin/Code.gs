@@ -130,7 +130,19 @@ function sendResourceEmail(email, name, trackingUrl) {
     'お申し込みいただきありがとうございます。\n' +
     '下記のURLより資料をご覧いただけます。\n\n' +
     trackingUrl + '\n';
-  MailApp.sendEmail(email, subject, body);
+  var htmlBody =
+    '<div style="font-family:\'Hiragino Kaku Gothic ProN\',\'Yu Gothic\',sans-serif; color:#222;">' +
+      '<p>' + name + ' 様</p>' +
+      '<p>お申し込みいただきありがとうございます。<br>下記のボタンより資料をご覧いただけます。</p>' +
+      '<p style="text-align:center; margin:32px 0;">' +
+        '<a href="' + trackingUrl + '" ' +
+        'style="display:inline-block; background:#2b6cb0; color:#ffffff; text-decoration:none; ' +
+        'padding:14px 32px; border-radius:6px; font-size:16px;">資料を見る</a>' +
+      '</p>' +
+      '<p style="font-size:12px; color:#666;">ボタンが開かない場合は、こちらのURLをブラウザで開いてください。<br>' +
+      '<a href="' + trackingUrl + '">' + trackingUrl + '</a></p>' +
+    '</div>';
+  MailApp.sendEmail(email, subject, body, { htmlBody: htmlBody });
 }
 
 /**
