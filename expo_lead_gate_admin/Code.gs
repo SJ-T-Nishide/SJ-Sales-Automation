@@ -268,6 +268,27 @@ function setupExpoForm() {
   Logger.log('フォーム編集URL: ' + form.getEditUrl());
 }
 
+/**
+ * 現在トリガーに紐づいている（＝実際に有効な）フォームの回答先スプレッドシートを
+ * 差し替えるための一回限りの手動実行用関数。GASエディタで一度実行すればよい。
+ * setDestination()呼び出しには新しいスプレッドシートへのアクセス権限が必要。
+ */
+function retargetExpoForm() {
+  var targetSpreadsheetId = '1BBT4t3VQ0gPVkV_gtIJ2lIz0_2OeM34dgHtJImfMHIM';
+  var trigger = ScriptApp.getProjectTriggers().filter(function(t) {
+    return t.getHandlerFunction() === 'onExpoFormSubmit';
+  })[0];
+  if (!trigger) {
+    Logger.log('onExpoFormSubmitのトリガーが見つかりません。先にsetupExpoForm()を実行してください。');
+    return;
+  }
+  var formId = trigger.getTriggerSourceId();
+  var form = FormApp.openById(formId);
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, targetSpreadsheetId);
+  Logger.log('紐付け変更完了。有効なフォームID: ' + formId);
+  Logger.log('フォーム回答用URL: ' + form.getPublishedUrl());
+}
+
 function onExpoFormSubmit(e) {
   try {
     var values = e && e.namedValues ? e.namedValues : {};
