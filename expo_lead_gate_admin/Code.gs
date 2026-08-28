@@ -27,6 +27,24 @@ function getTargetSpreadsheet() {
   return SpreadsheetApp.openById(CONFIG.TARGET_SPREADSHEET_ID);
 }
 
+/**
+ * メール送信に頼らずエラーを確認するための診断用ログ。
+ * 「エラーログ」シートに日時・発生箇所・内容を追記する。
+ */
+function logError(context, err) {
+  try {
+    var ss = getTargetSpreadsheet();
+    var sheet = ss.getSheetByName('エラーログ');
+    if (!sheet) {
+      sheet = ss.insertSheet('エラーログ');
+      sheet.getRange(1, 1, 1, 3).setValues([['日時', '発生箇所', '内容']]);
+    }
+    sheet.appendRow([nowJst(), context, String((err && err.stack) || err)]);
+  } catch (e2) {
+    // ログ書き込み自体が失敗した場合は諦める
+  }
+}
+
 function getSettingsSheet() {
   var ss = getTargetSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
@@ -162,7 +180,11 @@ function sendResourceEmail(email, name, trackingUrl) {
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
-  MailApp.sendEmail(email, subject, body);
+  try {
+    MailApp.sendEmail(email, subject, body);
+  } catch (err) {
+    logError('sendResourceEmail(' + email + ')', err);
+  }
 }
 
 /**
