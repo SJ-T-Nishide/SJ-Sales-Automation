@@ -192,6 +192,24 @@ function migrateTimestampsToJst() {
   });
 }
 
+function upsertRegistrant(name, email, phone) {
+  var sheet = getSheet();
+  var existingRow = findRowIndex(email, phone);
+  var token;
+  if (existingRow > 0) {
+    markSent(existingRow);
+    token = normalize(sheet.getRange(existingRow, 9).getValue());
+    if (!token) {
+      token = Utilities.getUuid();
+      sheet.getRange(existingRow, 9).setValue(token);
+    }
+  } else {
+    token = Utilities.getUuid();
+    sheet.appendRow([nowJst(), name, email, phone, 1, nowJst(), 0, '', token]);
+  }
+  sendResourceEmail(email, name, buildTrackingUrl(token));
+}
+
 function registerNew(data) {
   try {
     var name = normalize(data && data.name);
@@ -200,26 +218,65 @@ function registerNew(data) {
     if (!name || !email || !phone) {
       return { success: false, message: '名前・メールアドレス・電話番号をすべて入力してください。' };
     }
-
-    var sheet = getSheet();
-    var existingRow = findRowIndex(email, phone);
-    var token;
-    if (existingRow > 0) {
-      markSent(existingRow);
-      token = normalize(sheet.getRange(existingRow, 9).getValue());
-      if (!token) {
-        token = Utilities.getUuid();
-        sheet.getRange(existingRow, 9).setValue(token);
-      }
-    } else {
-      token = Utilities.getUuid();
-      sheet.appendRow([nowJst(), name, email, phone, 1, nowJst(), 0, '', token]);
-    }
-
-    sendResourceEmail(email, name, buildTrackingUrl(token));
+    upsertRegistrant(name, email, phone);
     return { success: true, message: 'ご入力いただいたメールアドレス宛に資料のURLをお送りしました。' };
   } catch (e) {
     Logger.log('[registerNew] ' + e.stack);
     return { success: false, message: '送信に失敗しました。時間をおいて再度お試しください。' };
+  }
+}
+
+var FORM_CONFIG = {
+  TITLE: '民泊経営パッケージ資料お申し込み',
+  Q_NAME: 'お名前か漢字フルネーム',
+  Q_EMAIL: 'メールアドレス',
+  Q_PHONE: '電話番号'
+};
+
+/**
+ * Google Formsルートの一回限りのセットアップ用関数。
+ * フォームを新規作成し、この登録者管理スプレッドシートに回答を紐付け、
+ * 送信時トリガー（onExpoFormSubmit）を登録する。GASエディタで一度実行すればよい。
+ * 実行後、ログに出るフォーム回答用URLをQRコード化して使う。
+ */
+function setupExpoForm() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var form = FormApp.create(FORM_CONFIG.TITLE);
+  form.setDescription('ご入力いただいたメールアドレス宛に資料のURLをお送りします。');
+  form.setCollectEmail(false);
+
+  form.addTextItem().setTitle(FORM_CONFIG.Q_NAME).setRequired(true);
+
+  var emailValidation = FormApp.createTextValidation()
+    .setHelpText('正しいメールアドレスを入力してください。')
+    .requireTextIsEmail()
+    .build();
+  form.addTextItem().setTitle(FORM_CONFIG.Q_EMAIL).setRequired(true).setValidation(emailValidation);
+
+  form.addTextItem().setTitle(FORM_CONFIG.Q_PHONE).setRequired(true);
+
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
+
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'onExpoFormSubmit') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('onExpoFormSubmit').forForm(form).onFormSubmit().create();
+
+  Logger.log('フォーム回答用URL: ' + form.getPublishedUrl());
+  Logger.log('フォーム編集URL: ' + form.getEditUrl());
+}
+
+function onExpoFormSubmit(e) {
+  try {
+    var values = e && e.namedValues ? e.namedValues : {};
+    var name = normalize((values[FORM_CONFIG.Q_NAME] || [])[0]);
+    var email = normalize((values[FORM_CONFIG.Q_EMAIL] || [])[0]);
+    var phone = normalize((values[FORM_CONFIG.Q_PHONE] || [])[0]);
+    if (!name || !email || !phone) return;
+    upsertRegistrant(name, email, phone);
+  } catch (err) {
+    Logger.log('[onExpoFormSubmit] ' + err.stack);
   }
 }
