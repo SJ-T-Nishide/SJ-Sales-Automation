@@ -169,6 +169,29 @@ function authorizeMailSending() {
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '【認可テスト】メール送信権限の確認', 'このメールが届けば、メール送信権限の認可は完了です。');
 }
 
+/**
+ * 過去に生の日付データとして保存された既存行の日時を、日本時間の文字列表示に
+ * 一括で直すための一回限りの手動実行用関数。記録された絶対時刻自体は変えず、
+ * 表示だけを日本時間で再フォーマットする。GASエディタで一度実行すればよい。
+ */
+function migrateTimestampsToJst() {
+  var sheet = getSheet();
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  [1, 6, 8].forEach(function(col) {
+    var range = sheet.getRange(2, col, lastRow - 1, 1);
+    var values = range.getValues();
+    var fixed = values.map(function(row) {
+      var v = row[0];
+      if (Object.prototype.toString.call(v) === '[object Date]') {
+        return [Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss')];
+      }
+      return [v];
+    });
+    range.setValues(fixed);
+  });
+}
+
 function registerNew(data) {
   try {
     var name = normalize(data && data.name);
