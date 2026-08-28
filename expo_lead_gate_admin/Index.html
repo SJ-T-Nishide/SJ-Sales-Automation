@@ -26,25 +26,6 @@
       text-align: center;
       margin: 0 0 20px;
     }
-    .tabs {
-      display: flex;
-      margin-bottom: 20px;
-      border-radius: 8px;
-      overflow: hidden;
-      border: 1px solid #d5d8dd;
-    }
-    .tab-btn {
-      flex: 1;
-      padding: 10px;
-      background: #f0f1f3;
-      border: none;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .tab-btn.active {
-      background: #2b6cb0;
-      color: #fff;
-    }
     .field {
       margin-bottom: 14px;
     }
@@ -83,111 +64,76 @@
       display: none;
       white-space: pre-line;
     }
-    .panel { display: none; }
-    .panel.active { display: block; }
-    #viewerWrap {
+    .pending {
+      color: #1a6b3c;
+      background: #eaf7ef;
+      border: 1px solid #bfe6cd;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      margin-top: 10px;
       display: none;
-      max-width: 900px;
-      margin: 0 auto;
-    }
-    #viewerWrap iframe {
-      width: 100%;
-      height: 70vh;
-      border: none;
-      border-radius: 8px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
-      background: #000;
+      white-space: pre-line;
     }
   </style>
 </head>
 <body>
   <div class="card" id="gateCard">
-    <h1>資料を閲覧するには情報の入力が必要です</h1>
-    <div class="tabs">
-      <button type="button" class="tab-btn active" id="tabNew">はじめての方</button>
-      <button type="button" class="tab-btn" id="tabReturning">登録済みの方</button>
-    </div>
+    <h1>資料をメールでお届けします</h1>
 
-    <div class="panel active" id="panelNew">
-      <div class="field">
-        <label for="name">お名前か漢字フルネーム（必須）</label>
-        <input type="text" id="name" autocomplete="name" required>
-      </div>
-      <div class="field">
-        <label for="email">メールアドレス（必須）</label>
-        <input type="email" id="email" autocomplete="email" required>
-      </div>
-      <div class="field">
-        <label for="phone">電話番号（必須）</label>
-        <input type="tel" id="phone" autocomplete="tel" required>
-      </div>
-      <button type="button" class="submit" id="btnNew">資料を見る</button>
+    <div class="field">
+      <label for="name">お名前か漢字フルネーム（必須）</label>
+      <input type="text" id="name" autocomplete="name" required>
     </div>
-
-    <div class="panel" id="panelReturning">
-      <div class="field">
-        <label for="contact">登録済みのメールアドレス または 電話番号</label>
-        <input type="text" id="contact">
-      </div>
-      <button type="button" class="submit" id="btnReturning">資料を見る</button>
+    <div class="field">
+      <label for="email">メールアドレス（必須）</label>
+      <input type="email" id="email" autocomplete="email" required>
     </div>
+    <div class="field">
+      <label for="phone">電話番号（必須）</label>
+      <input type="tel" id="phone" autocomplete="tel" required>
+    </div>
+    <button type="button" class="submit" id="btnSend">資料をメールで受け取る</button>
 
     <div class="error" id="errorBox"></div>
-  </div>
-
-  <div id="viewerWrap">
-    <iframe id="slideFrame" allowfullscreen="true" allow="autoplay"></iframe>
+    <div class="pending" id="pendingBox"></div>
   </div>
 
   <script>
-    var tabNew = document.getElementById('tabNew');
-    var tabReturning = document.getElementById('tabReturning');
-    var panelNew = document.getElementById('panelNew');
-    var panelReturning = document.getElementById('panelReturning');
     var errorBox = document.getElementById('errorBox');
-    var btnNew = document.getElementById('btnNew');
-    var btnReturning = document.getElementById('btnReturning');
+    var pendingBox = document.getElementById('pendingBox');
+    var btnSend = document.getElementById('btnSend');
 
-    tabNew.addEventListener('click', function () { switchTab(true); });
-    tabReturning.addEventListener('click', function () { switchTab(false); });
-
-    function switchTab(isNew) {
-      tabNew.classList.toggle('active', isNew);
-      tabReturning.classList.toggle('active', !isNew);
-      panelNew.classList.toggle('active', isNew);
-      panelReturning.classList.toggle('active', !isNew);
-      hideError();
-    }
-
-    function hideError() {
+    function hideMessages() {
       errorBox.style.display = 'none';
       errorBox.textContent = '';
+      pendingBox.style.display = 'none';
+      pendingBox.textContent = '';
     }
 
     function showError(message) {
+      pendingBox.style.display = 'none';
       errorBox.textContent = message;
       errorBox.style.display = 'block';
     }
 
-    function setLoading(isLoading) {
-      btnNew.disabled = isLoading;
-      btnReturning.disabled = isLoading;
+    function showSent(message) {
+      errorBox.style.display = 'none';
+      pendingBox.textContent = message;
+      pendingBox.style.display = 'block';
     }
 
-    function showSlides(url) {
-      document.getElementById('gateCard').style.display = 'none';
-      document.getElementById('slideFrame').src = url;
-      document.getElementById('viewerWrap').style.display = 'block';
+    function setLoading(isLoading) {
+      btnSend.disabled = isLoading;
     }
 
     function handleResult(result) {
       setLoading(false);
-      if (result && result.success) {
-        hideError();
-        showSlides(result.slideUrl);
-      } else {
+      if (!result || !result.success) {
         showError((result && result.message) || 'エラーが発生しました。');
+        return;
       }
+      showSent(result.message || 'メールを送信しました。');
     }
 
     function handleFailure(error) {
@@ -195,8 +141,8 @@
       showError('通信エラーが発生しました。時間をおいて再度お試しください。');
     }
 
-    btnNew.addEventListener('click', function () {
-      hideError();
+    btnSend.addEventListener('click', function () {
+      hideMessages();
       var data = {
         name: document.getElementById('name').value,
         email: document.getElementById('email').value,
@@ -211,20 +157,6 @@
         .withSuccessHandler(handleResult)
         .withFailureHandler(handleFailure)
         .registerNew(data);
-    });
-
-    btnReturning.addEventListener('click', function () {
-      hideError();
-      var contact = document.getElementById('contact').value;
-      if (!contact.trim()) {
-        showError('メールアドレスまたは電話番号を入力してください。');
-        return;
-      }
-      setLoading(true);
-      google.script.run
-        .withSuccessHandler(handleResult)
-        .withFailureHandler(handleFailure)
-        .lookupReturning(contact);
     });
   </script>
 </body>

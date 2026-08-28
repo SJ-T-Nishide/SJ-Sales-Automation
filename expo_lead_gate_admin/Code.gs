@@ -1,6 +1,6 @@
 /**
  * Code.gs
- * エキスポ資料共有ゲート — リード登録Webフォーム
+ * エキスポ資料共有ゲート — リード登録フォーム（メールでURL送信するだけの簡易版）
  * Success Japan株式会社
  *
  * 本体: Googleスプレッドシートに紐づくApps Script（clasp管理）
@@ -8,14 +8,14 @@
  */
 
 var CONFIG = {
-  SLIDE_ID: '16wVlmSRrnOucCxOOFoTK8tBxMFfi47eD',
+  SLIDE_URL: 'https://docs.google.com/presentation/d/16wVlmSRrnOucCxOOFoTK8tBxMFfi47eD/edit?usp=sharing&ouid=106986966384787236010&rtpof=true&sd=true',
   SHEET_NAME: '登録者',
-  HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '閲覧回数', '最終閲覧日時']
+  HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時']
 };
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Index').evaluate()
-    .setTitle('資料閲覧のご案内')
+    .setTitle('資料お申し込み')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
@@ -55,7 +55,7 @@ function findRowIndex(email, phone) {
   return -1;
 }
 
-function markVisit(rowIndex) {
+function markSent(rowIndex) {
   var sheet = getSheet();
   var countCell = sheet.getRange(rowIndex, 5);
   var current = Number(countCell.getValue()) || 0;
@@ -63,8 +63,13 @@ function markVisit(rowIndex) {
   sheet.getRange(rowIndex, 6).setValue(new Date());
 }
 
-function getSlideEmbedUrl() {
-  return 'https://docs.google.com/presentation/d/' + CONFIG.SLIDE_ID + '/embed?start=false&loop=false&delayms=5000';
+function sendResourceEmail(email, name) {
+  var subject = '【Success Japan】資料のご案内';
+  var body = name + ' 様\n\n' +
+    'お申し込みいただきありがとうございます。\n' +
+    '下記のURLより資料をご覧いただけます。\n\n' +
+    CONFIG.SLIDE_URL + '\n';
+  MailApp.sendEmail(email, subject, body);
 }
 
 function registerNew(data) {
@@ -75,33 +80,19 @@ function registerNew(data) {
     if (!name || !email || !phone) {
       return { success: false, message: '名前・メールアドレス・電話番号をすべて入力してください。' };
     }
+
+    var sheet = getSheet();
     var existingRow = findRowIndex(email, phone);
     if (existingRow > 0) {
-      markVisit(existingRow);
+      markSent(existingRow);
     } else {
-      getSheet().appendRow([new Date(), name, email, phone, 1, new Date()]);
+      sheet.appendRow([new Date(), name, email, phone, 1, new Date()]);
     }
-    return { success: true, slideUrl: getSlideEmbedUrl() };
+
+    sendResourceEmail(email, name);
+    return { success: true, message: 'ご入力いただいたメールアドレス宛に資料のURLをお送りしました。' };
   } catch (e) {
     Logger.log('[registerNew] ' + e.stack);
-    return { success: false, message: '登録に失敗しました。時間をおいて再度お試しください。' };
-  }
-}
-
-function lookupReturning(contact) {
-  try {
-    var value = normalize(contact);
-    if (!value) {
-      return { success: false, message: 'メールアドレスまたは電話番号を入力してください。' };
-    }
-    var rowIndex = findRowIndex(value, value);
-    if (rowIndex < 0) {
-      return { success: false, message: '登録が見つかりませんでした。お手数ですが初回登録をお願いします。' };
-    }
-    markVisit(rowIndex);
-    return { success: true, slideUrl: getSlideEmbedUrl() };
-  } catch (e) {
-    Logger.log('[lookupReturning] ' + e.stack);
-    return { success: false, message: '確認に失敗しました。時間をおいて再度お試しください。' };
+    return { success: false, message: '送信に失敗しました。時間をおいて再度お試しください。' };
   }
 }
