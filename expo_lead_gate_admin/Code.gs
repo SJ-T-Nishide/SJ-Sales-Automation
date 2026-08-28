@@ -8,10 +8,24 @@
  */
 
 var CONFIG = {
-  SLIDE_URL: 'https://docs.google.com/presentation/d/16wVlmSRrnOucCxOOFoTK8tBxMFfi47eD/edit?usp=sharing&ouid=106986966384787236010&rtpof=true&sd=true',
+  DEFAULT_RESOURCE_URL: 'https://drive.google.com/file/d/1IdBdAfGHDvK75VQIqsxZfrhz_oclheFa/view?usp=sharing',
   SHEET_NAME: '登録者',
-  HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時']
+  HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時'],
+  SHEET_SETTINGS: '設定',
+  SETTINGS_URL_CELL: 'B1'
 };
+
+function getResourceUrl() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEET_SETTINGS);
+    sheet.getRange('A1').setValue('資料URL');
+    sheet.getRange(CONFIG.SETTINGS_URL_CELL).setValue(CONFIG.DEFAULT_RESOURCE_URL);
+  }
+  var url = normalize(sheet.getRange(CONFIG.SETTINGS_URL_CELL).getValue());
+  return url || CONFIG.DEFAULT_RESOURCE_URL;
+}
 
 function doGet() {
   return HtmlService.createTemplateFromFile('Index').evaluate()
@@ -68,8 +82,17 @@ function sendResourceEmail(email, name) {
   var body = name + ' 様\n\n' +
     'お申し込みいただきありがとうございます。\n' +
     '下記のURLより資料をご覧いただけます。\n\n' +
-    CONFIG.SLIDE_URL + '\n';
+    getResourceUrl() + '\n';
   MailApp.sendEmail(email, subject, body);
+}
+
+/**
+ * メール送信権限を認可するための一回限りの手動実行用関数。
+ * GASエディタの関数選択で authorizeMailSending を選び「実行」を押すと、
+ * MailApp.sendEmail の権限確認ダイアログが表示される。認可が済んだら削除してよい。
+ */
+function authorizeMailSending() {
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '【認可テスト】メール送信権限の確認', 'このメールが届けば、メール送信権限の認可は完了です。');
 }
 
 function registerNew(data) {
