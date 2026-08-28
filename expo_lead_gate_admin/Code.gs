@@ -294,15 +294,48 @@ function retargetExpoForm() {
   Logger.log('フォーム回答用URL: ' + form.getPublishedUrl());
 }
 
+/**
+ * トリガーの登録状況を確認するための診断用関数。GASエディタで実行し、
+ * 実行ログでonExpoFormSubmitがどのフォームIDに紐づいているか確認する。
+ */
+function listTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    Logger.log(t.getHandlerFunction() + ' / ' + t.getEventType() + ' / sourceId=' + t.getTriggerSourceId());
+  });
+}
+
 function onExpoFormSubmit(e) {
   try {
+    var name = '';
+    var email = '';
+    var phone = '';
+
     var values = e && e.namedValues ? e.namedValues : {};
-    var name = normalize((values[FORM_CONFIG.Q_NAME] || [])[0]);
-    var email = normalize((values[FORM_CONFIG.Q_EMAIL] || [])[0]);
-    var phone = normalize((values[FORM_CONFIG.Q_PHONE] || [])[0]);
-    if (!name || !email || !phone) return;
+    name = normalize((values[FORM_CONFIG.Q_NAME] || [])[0]);
+    email = normalize((values[FORM_CONFIG.Q_EMAIL] || [])[0]);
+    phone = normalize((values[FORM_CONFIG.Q_PHONE] || [])[0]);
+
+    if ((!name || !email || !phone) && e && e.response) {
+      e.response.getItemResponses().forEach(function(item) {
+        var title = item.getItem().getTitle();
+        var answer = normalize(item.getResponse());
+        if (title === FORM_CONFIG.Q_NAME) name = name || answer;
+        if (title === FORM_CONFIG.Q_EMAIL) email = email || answer;
+        if (title === FORM_CONFIG.Q_PHONE) phone = phone || answer;
+      });
+    }
+
+    if (!name || !email || !phone) {
+      Logger.log('[onExpoFormSubmit] 項目が取得できませんでした。namedValues=' + JSON.stringify(values));
+      return;
+    }
     upsertRegistrant(name, email, phone);
   } catch (err) {
     Logger.log('[onExpoFormSubmit] ' + err.stack);
+    try {
+      MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '【エラー】onExpoFormSubmit失敗', String(err.stack || err));
+    } catch (mailErr) {
+      // メール送信自体が失敗しても握りつぶす
+    }
   }
 }
