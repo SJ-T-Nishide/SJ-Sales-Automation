@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+      margin: 0;
+      padding: 24px 16px;
+      background: #f5f6f8;
+      color: #222;
+    }
+    .card {
+      max-width: 420px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    }
+    h1 {
+      font-size: 18px;
+      text-align: center;
+      margin: 0 0 20px;
+    }
+    .tabs {
+      display: flex;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #d5d8dd;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      background: #f0f1f3;
+      border: none;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #2b6cb0;
+      color: #fff;
+    }
+    .field {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+      color: #444;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      font-size: 15px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    button.submit {
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      background: #2b6cb0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    button.submit:disabled {
+      background: #9db8d4;
+      cursor: default;
+    }
+    .error {
+      color: #c0392b;
+      font-size: 13px;
+      margin-top: 10px;
+      display: none;
+      white-space: pre-line;
+    }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    #viewerWrap {
+      display: none;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    #viewerWrap iframe {
+      width: 100%;
+      height: 70vh;
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="gateCard">
+    <h1>資料を閲覧するには情報の入力が必要です</h1>
+    <div class="tabs">
+      <button type="button" class="tab-btn active" id="tabNew">はじめての方</button>
+      <button type="button" class="tab-btn" id="tabReturning">登録済みの方</button>
+    </div>
+
+    <div class="panel active" id="panelNew">
+      <div class="field">
+        <label for="name">お名前</label>
+        <input type="text" id="name" autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="email">メールアドレス</label>
+        <input type="email" id="email" autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="phone">電話番号</label>
+        <input type="tel" id="phone" autocomplete="tel">
+      </div>
+      <button type="button" class="submit" id="btnNew">資料を見る</button>
+    </div>
+
+    <div class="panel" id="panelReturning">
+      <div class="field">
+        <label for="contact">登録済みのメールアドレス または 電話番号</label>
+        <input type="text" id="contact">
+      </div>
+      <button type="button" class="submit" id="btnReturning">資料を見る</button>
+    </div>
+
+    <div class="error" id="errorBox"></div>
+  </div>
+
+  <div id="viewerWrap">
+    <iframe id="slideFrame" allowfullscreen="true" allow="autoplay"></iframe>
+  </div>
+
+  <script>
+    var tabNew = document.getElementById('tabNew');
+    var tabReturning = document.getElementById('tabReturning');
+    var panelNew = document.getElementById('panelNew');
+    var panelReturning = document.getElementById('panelReturning');
+    var errorBox = document.getElementById('errorBox');
+    var btnNew = document.getElementById('btnNew');
+    var btnReturning = document.getElementById('btnReturning');
+
+    tabNew.addEventListener('click', function () { switchTab(true); });
+    tabReturning.addEventListener('click', function () { switchTab(false); });
+
+    function switchTab(isNew) {
+      tabNew.classList.toggle('active', isNew);
+      tabReturning.classList.toggle('active', !isNew);
+      panelNew.classList.toggle('active', isNew);
+      panelReturning.classList.toggle('active', !isNew);
+      hideError();
+    }
+
+    function hideError() {
+      errorBox.style.display = 'none';
+      errorBox.textContent = '';
+    }
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.style.display = 'block';
+    }
+
+    function setLoading(isLoading) {
+      btnNew.disabled = isLoading;
+      btnReturning.disabled = isLoading;
+    }
+
+    function showSlides(url) {
+      document.getElementById('gateCard').style.display = 'none';
+      document.getElementById('slideFrame').src = url;
+      document.getElementById('viewerWrap').style.display = 'block';
+    }
+
+    function handleResult(result) {
+      setLoading(false);
+      if (result && result.success) {
+        hideError();
+        showSlides(result.slideUrl);
+      } else {
+        showError((result && result.message) || 'エラーが発生しました。');
+      }
+    }
+
+    function handleFailure(error) {
+      setLoading(false);
+      showError('通信エラーが発生しました。時間をおいて再度お試しください。');
+    }
+
+    btnNew.addEventListener('click', function () {
+      hideError();
+      var data = {
+        name: document.getElementById('name').value,
+        email: document.getElementById('email').value,
+        phone: document.getElementById('phone').value
+      };
+      if (!data.name.trim() || !data.email.trim() || !data.phone.trim()) {
+        showError('名前・メールアドレス・電話番号をすべて入力してください。');
+        return;
+      }
+      setLoading(true);
+      google.script.run
+        .withSuccessHandler(handleResult)
+        .withFailureHandler(handleFailure)
+        .registerNew(data);
+    });
+
+    btnReturning.addEventListener('click', function () {
+      hideError();
+      var contact = document.getElementById('contact').value;
+      if (!contact.trim()) {
+        showError('メールアドレスまたは電話番号を入力してください。');
+        return;
+      }
+      setLoading(true);
+      google.script.run
+        .withSuccessHandler(handleResult)
+        .withFailureHandler(handleFailure)
+        .lookupReturning(contact);
+    });
+  </script>
+</body>
+</html>
