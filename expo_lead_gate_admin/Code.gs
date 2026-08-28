@@ -9,22 +9,46 @@
 
 var CONFIG = {
   DEFAULT_RESOURCE_URL: 'https://drive.google.com/file/d/1IdBdAfGHDvK75VQIqsxZfrhz_oclheFa/view?usp=sharing',
+  DEFAULT_BODY_TEMPLATE: '{name} 様\n\n' +
+    'お申込みありがとうございます。(株)タスワンカンパニーでございます。民泊経営パッケージの資料をお送りいたします。\n\n' +
+    '{url}\n\n' +
+    '株式会社タスワンカンパニー\n' +
+    '06-6147-3947\n' +
+    'tasone.clients@gmail.com',
   SHEET_NAME: '登録者',
   HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時', 'クリック数', '最終クリック日時', '追跡トークン'],
   SHEET_SETTINGS: '設定',
-  SETTINGS_URL_CELL: 'B1'
+  SETTINGS_URL_CELL: 'B1',
+  SETTINGS_BODY_CELL: 'B2'
 };
 
-function getResourceUrl() {
+function getSettingsSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_SETTINGS);
+  }
+  if (!normalize(sheet.getRange('A1').getValue())) {
     sheet.getRange('A1').setValue('資料URL');
     sheet.getRange(CONFIG.SETTINGS_URL_CELL).setValue(CONFIG.DEFAULT_RESOURCE_URL);
   }
+  if (!normalize(sheet.getRange('A2').getValue())) {
+    sheet.getRange('A2').setValue('メール本文テンプレート（{name}=お名前 / {url}=資料URLに置換）');
+    sheet.getRange(CONFIG.SETTINGS_BODY_CELL).setValue(CONFIG.DEFAULT_BODY_TEMPLATE);
+  }
+  return sheet;
+}
+
+function getResourceUrl() {
+  var sheet = getSettingsSheet();
   var url = normalize(sheet.getRange(CONFIG.SETTINGS_URL_CELL).getValue());
   return url || CONFIG.DEFAULT_RESOURCE_URL;
+}
+
+function getBodyTemplate() {
+  var sheet = getSettingsSheet();
+  var template = normalize(sheet.getRange(CONFIG.SETTINGS_BODY_CELL).getValue());
+  return template || CONFIG.DEFAULT_BODY_TEMPLATE;
 }
 
 function doGet(e) {
@@ -126,23 +150,10 @@ function buildTrackingUrl(token) {
 
 function sendResourceEmail(email, name, trackingUrl) {
   var subject = '【Success Japan】資料のご案内';
-  var body = name + ' 様\n\n' +
-    'お申し込みいただきありがとうございます。\n' +
-    '下記のURLより資料をご覧いただけます。\n\n' +
-    trackingUrl + '\n';
-  var htmlBody =
-    '<div style="font-family:\'Hiragino Kaku Gothic ProN\',\'Yu Gothic\',sans-serif; color:#222;">' +
-      '<p>' + name + ' 様</p>' +
-      '<p>お申し込みいただきありがとうございます。<br>下記のボタンより資料をご覧いただけます。</p>' +
-      '<p style="text-align:center; margin:32px 0;">' +
-        '<a href="' + trackingUrl + '" ' +
-        'style="display:inline-block; background:#2b6cb0; color:#ffffff; text-decoration:none; ' +
-        'padding:14px 32px; border-radius:6px; font-size:16px;">資料を見る</a>' +
-      '</p>' +
-      '<p style="font-size:12px; color:#666;">ボタンが開かない場合は、こちらのURLをブラウザで開いてください。<br>' +
-      '<a href="' + trackingUrl + '">' + trackingUrl + '</a></p>' +
-    '</div>';
-  MailApp.sendEmail(email, subject, body, { htmlBody: htmlBody });
+  var body = getBodyTemplate()
+    .replace(/\{name\}/g, name)
+    .replace(/\{url\}/g, trackingUrl);
+  MailApp.sendEmail(email, subject, body);
 }
 
 /**
