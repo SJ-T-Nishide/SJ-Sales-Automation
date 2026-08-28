@@ -19,34 +19,11 @@ var CONFIG = {
   HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時', 'クリック数', '最終クリック日時', '追跡トークン'],
   SHEET_SETTINGS: '設定',
   SETTINGS_URL_CELL: 'B1',
-  SETTINGS_BODY_CELL: 'B2',
-  TARGET_SPREADSHEET_ID: '1BBT4t3VQ0gPVkV_gtIJ2lIz0_2OeM34dgHtJImfMHIM'
+  SETTINGS_BODY_CELL: 'B2'
 };
 
-function getTargetSpreadsheet() {
-  return SpreadsheetApp.openById(CONFIG.TARGET_SPREADSHEET_ID);
-}
-
-/**
- * メール送信に頼らずエラーを確認するための診断用ログ。
- * 「エラーログ」シートに日時・発生箇所・内容を追記する。
- */
-function logError(context, err) {
-  try {
-    var ss = getTargetSpreadsheet();
-    var sheet = ss.getSheetByName('エラーログ');
-    if (!sheet) {
-      sheet = ss.insertSheet('エラーログ');
-      sheet.getRange(1, 1, 1, 3).setValues([['日時', '発生箇所', '内容']]);
-    }
-    sheet.appendRow([nowJst(), context, String((err && err.stack) || err)]);
-  } catch (e2) {
-    // ログ書き込み自体が失敗した場合は諦める
-  }
-}
-
 function getSettingsSheet() {
-  var ss = getTargetSpreadsheet();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_SETTINGS);
@@ -101,7 +78,7 @@ function handleClick(token) {
 }
 
 function getSheet() {
-  var ss = getTargetSpreadsheet();
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_NAME);
@@ -180,11 +157,7 @@ function sendResourceEmail(email, name, trackingUrl) {
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
-  try {
-    MailApp.sendEmail(email, subject, body);
-  } catch (err) {
-    logError('sendResourceEmail(' + email + ')', err);
-  }
+  MailApp.sendEmail(email, subject, body);
 }
 
 /**
@@ -219,6 +192,18 @@ function migrateTimestampsToJst() {
   });
 }
 
+/**
+ * Google Formsルートの実験で作成した onExpoFormSubmit トリガーを取り除くための
+ * 一回限りの手動実行用関数。実行後は削除してよい。
+ */
+function removeExpoFormTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'onExpoFormSubmit') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
+
 function upsertRegistrant(name, email, phone) {
   var sheet = getSheet();
   var existingRow = findRowIndex(email, phone);
@@ -250,114 +235,5 @@ function registerNew(data) {
   } catch (e) {
     Logger.log('[registerNew] ' + e.stack);
     return { success: false, message: '送信に失敗しました。時間をおいて再度お試しください。' };
-  }
-}
-
-var FORM_CONFIG = {
-  TITLE: '民泊経営パッケージ資料お申し込み',
-  Q_NAME: 'お名前か漢字フルネーム',
-  Q_EMAIL: 'メールアドレス',
-  Q_PHONE: '電話番号'
-};
-
-/**
- * Google Formsルートの一回限りのセットアップ用関数。
- * フォームを新規作成し、この登録者管理スプレッドシートに回答を紐付け、
- * 送信時トリガー（onExpoFormSubmit）を登録する。GASエディタで一度実行すればよい。
- * 実行後、ログに出るフォーム回答用URLをQRコード化して使う。
- */
-function setupExpoForm() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var form = FormApp.create(FORM_CONFIG.TITLE);
-  form.setDescription('ご入力いただいたメールアドレス宛に資料のURLをお送りします。');
-  form.setCollectEmail(false);
-
-  form.addTextItem().setTitle(FORM_CONFIG.Q_NAME).setRequired(true);
-
-  var emailValidation = FormApp.createTextValidation()
-    .setHelpText('正しいメールアドレスを入力してください。')
-    .requireTextIsEmail()
-    .build();
-  form.addTextItem().setTitle(FORM_CONFIG.Q_EMAIL).setRequired(true).setValidation(emailValidation);
-
-  form.addTextItem().setTitle(FORM_CONFIG.Q_PHONE).setRequired(true);
-
-  form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
-
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'onExpoFormSubmit') {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
-  ScriptApp.newTrigger('onExpoFormSubmit').forForm(form).onFormSubmit().create();
-
-  Logger.log('フォーム回答用URL: ' + form.getPublishedUrl());
-  Logger.log('フォーム編集URL: ' + form.getEditUrl());
-}
-
-/**
- * 現在トリガーに紐づいている（＝実際に有効な）フォームの回答先スプレッドシートを
- * 差し替えるための一回限りの手動実行用関数。GASエディタで一度実行すればよい。
- * setDestination()呼び出しには新しいスプレッドシートへのアクセス権限が必要。
- */
-function retargetExpoForm() {
-  var targetSpreadsheetId = '1BBT4t3VQ0gPVkV_gtIJ2lIz0_2OeM34dgHtJImfMHIM';
-  var trigger = ScriptApp.getProjectTriggers().filter(function(t) {
-    return t.getHandlerFunction() === 'onExpoFormSubmit';
-  })[0];
-  if (!trigger) {
-    Logger.log('onExpoFormSubmitのトリガーが見つかりません。先にsetupExpoForm()を実行してください。');
-    return;
-  }
-  var formId = trigger.getTriggerSourceId();
-  var form = FormApp.openById(formId);
-  form.setDestination(FormApp.DestinationType.SPREADSHEET, targetSpreadsheetId);
-  Logger.log('紐付け変更完了。有効なフォームID: ' + formId);
-  Logger.log('フォーム回答用URL: ' + form.getPublishedUrl());
-}
-
-/**
- * トリガーの登録状況を確認するための診断用関数。GASエディタで実行し、
- * 実行ログでonExpoFormSubmitがどのフォームIDに紐づいているか確認する。
- */
-function listTriggers() {
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    Logger.log(t.getHandlerFunction() + ' / ' + t.getEventType() + ' / sourceId=' + t.getTriggerSourceId());
-  });
-}
-
-function onExpoFormSubmit(e) {
-  try {
-    var name = '';
-    var email = '';
-    var phone = '';
-
-    var values = e && e.namedValues ? e.namedValues : {};
-    name = normalize((values[FORM_CONFIG.Q_NAME] || [])[0]);
-    email = normalize((values[FORM_CONFIG.Q_EMAIL] || [])[0]);
-    phone = normalize((values[FORM_CONFIG.Q_PHONE] || [])[0]);
-
-    if ((!name || !email || !phone) && e && e.response) {
-      e.response.getItemResponses().forEach(function(item) {
-        var title = item.getItem().getTitle();
-        var answer = normalize(item.getResponse());
-        if (title === FORM_CONFIG.Q_NAME) name = name || answer;
-        if (title === FORM_CONFIG.Q_EMAIL) email = email || answer;
-        if (title === FORM_CONFIG.Q_PHONE) phone = phone || answer;
-      });
-    }
-
-    if (!name || !email || !phone) {
-      Logger.log('[onExpoFormSubmit] 項目が取得できませんでした。namedValues=' + JSON.stringify(values));
-      return;
-    }
-    upsertRegistrant(name, email, phone);
-  } catch (err) {
-    Logger.log('[onExpoFormSubmit] ' + err.stack);
-    try {
-      MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '【エラー】onExpoFormSubmit失敗', String(err.stack || err));
-    } catch (mailErr) {
-      // メール送信自体が失敗しても握りつぶす
-    }
   }
 }
