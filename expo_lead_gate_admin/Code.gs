@@ -92,6 +92,10 @@ function normalize(v) {
   return (v || '').toString().trim();
 }
 
+function nowJst() {
+  return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+}
+
 function normalizePhone(v) {
   return normalize(v).replace(/[^0-9]/g, '');
 }
@@ -133,7 +137,7 @@ function markSent(rowIndex) {
   var countCell = sheet.getRange(rowIndex, 5);
   var current = Number(countCell.getValue()) || 0;
   countCell.setValue(current + 1);
-  sheet.getRange(rowIndex, 6).setValue(new Date());
+  sheet.getRange(rowIndex, 6).setValue(nowJst());
 }
 
 function markClicked(rowIndex) {
@@ -141,7 +145,7 @@ function markClicked(rowIndex) {
   var countCell = sheet.getRange(rowIndex, 7);
   var current = Number(countCell.getValue()) || 0;
   countCell.setValue(current + 1);
-  sheet.getRange(rowIndex, 8).setValue(new Date());
+  sheet.getRange(rowIndex, 8).setValue(nowJst());
 }
 
 function buildTrackingUrl(token) {
@@ -186,7 +190,7 @@ function registerNew(data) {
       }
     } else {
       token = Utilities.getUuid();
-      sheet.appendRow([new Date(), name, email, phone, 1, new Date(), 0, '', token]);
+      sheet.appendRow([nowJst(), name, email, phone, 1, nowJst(), 0, '', token]);
     }
 
     sendResourceEmail(email, name, buildTrackingUrl(token));
