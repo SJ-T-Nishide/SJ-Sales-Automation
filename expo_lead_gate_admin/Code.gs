@@ -19,11 +19,16 @@ var CONFIG = {
   HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時', 'クリック数', '最終クリック日時', '追跡トークン'],
   SHEET_SETTINGS: '設定',
   SETTINGS_URL_CELL: 'B1',
-  SETTINGS_BODY_CELL: 'B2'
+  SETTINGS_BODY_CELL: 'B2',
+  TARGET_SPREADSHEET_ID: '1BBT4t3VQ0gPVkV_gtIJ2lIz0_2OeM34dgHtJImfMHIM'
 };
 
+function getTargetSpreadsheet() {
+  return SpreadsheetApp.openById(CONFIG.TARGET_SPREADSHEET_ID);
+}
+
 function getSettingsSheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getTargetSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_SETTINGS);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_SETTINGS);
@@ -78,7 +83,7 @@ function handleClick(token) {
 }
 
 function getSheet() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getTargetSpreadsheet();
   var sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.SHEET_NAME);
