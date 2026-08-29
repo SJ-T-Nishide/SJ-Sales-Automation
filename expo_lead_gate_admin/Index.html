@@ -22,11 +22,46 @@
       padding: 28px 22px 32px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.08);
     }
+    .brand {
+      font-size: 26px;
+      font-weight: bold;
+      line-height: 1.4;
+      text-align: center;
+      color: #2b6cb0;
+      margin: 0 0 10px;
+    }
     h1 {
-      font-size: 38px;
+      font-size: 34px;
       line-height: 1.35;
       text-align: center;
+      margin: 0 0 24px;
+    }
+    .points {
+      list-style: none;
       margin: 0 0 32px;
+      padding: 20px 18px;
+      background: #f0f5fb;
+      border-radius: 10px;
+    }
+    .points li {
+      font-size: 26px;
+      font-weight: bold;
+      line-height: 1.45;
+      color: #1f3f66;
+      padding-left: 40px;
+      position: relative;
+    }
+    .points li + li {
+      margin-top: 16px;
+    }
+    .points li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      top: 0;
+      color: #2b6cb0;
+      font-size: 30px;
+      line-height: 1.25;
     }
     .field {
       margin-bottom: 28px;
@@ -94,7 +129,14 @@
 </head>
 <body>
   <div class="card" id="gateCard">
-    <h1>資料をメールでお届けします</h1>
+    <div class="brand">株式会社タスワンカンパニー</div>
+    <h1>民泊経営パッケージ資料をお届けします。</h1>
+    <ul class="points">
+      <li>初期投資３００万円からで運営は完全自動</li>
+      <li>即時一括償却で節税！？</li>
+      <li>補助金２００万円も申請可能</li>
+      <li>実質利回り１５％をコロナ中も維持</li>
+    </ul>
 
     <div class="field">
       <label for="name">お名前か漢字フルネーム（必須）</label>
