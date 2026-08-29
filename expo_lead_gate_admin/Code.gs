@@ -179,27 +179,12 @@ function sendResourceEmail(email, name, trackingUrl) {
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
 
-  var aliases = [];
-  try {
-    aliases = GmailApp.getAliases();
-  } catch (err) {
-    logSendError('GmailApp.getAliases', err);
-  }
-
-  if (aliases.indexOf(SENDER_ALIAS) !== -1) {
-    try {
-      GmailApp.sendEmail(email, subject, body, {
-        from: SENDER_ALIAS,
-        name: SENDER_NAME
-      });
-      return;
-    } catch (err) {
-      logSendError('GmailApp.sendEmail(' + email + ')', err);
-      // 失敗した場合は下のMailAppへフォールバックする
-    }
-  }
-
-  MailApp.sendEmail(email, subject, body, { name: SENDER_NAME, replyTo: SENDER_ALIAS });
+  // 注意: GmailApp.sendEmail(from指定あり) や、name/replyTo等のオプション付き
+  // MailApp.sendEmail は「premium email」という別枠の非常に少ない日次上限を消費し、
+  // 本番稼働中に「1日にサービス premium email を実行した回数が多すぎます」で
+  // 両方とも送信不能になる事故が実際に発生した。差出人ブランディングは諦め、
+  // 上限に余裕のあるプレーン送信のみに戻す（本番の送信継続を最優先）。
+  MailApp.sendEmail(email, subject, body);
 }
 
 /**
