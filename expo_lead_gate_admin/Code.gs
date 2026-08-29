@@ -19,7 +19,8 @@ var CONFIG = {
   HEADERS: ['初回登録日時', '名前', 'メールアドレス', '電話番号', '送信回数', '最終送信日時', 'クリック数', '最終クリック日時', '追跡トークン'],
   SHEET_SETTINGS: '設定',
   SETTINGS_URL_CELL: 'B1',
-  SETTINGS_BODY_CELL: 'B2'
+  SETTINGS_BODY_CELL: 'B2',
+  SETTINGS_METHOD_CELL: 'B3'
 };
 
 function getSettingsSheet() {
@@ -35,6 +36,10 @@ function getSettingsSheet() {
   if (!normalize(sheet.getRange('A2').getValue())) {
     sheet.getRange('A2').setValue('メール本文テンプレート（{name}=お名前 / {url}=資料URLに置換）');
     sheet.getRange(CONFIG.SETTINGS_BODY_CELL).setValue(CONFIG.DEFAULT_BODY_TEMPLATE);
+  }
+  if (!normalize(sheet.getRange('A3').getValue())) {
+    sheet.getRange('A3').setValue('送信方式（gmail_api = 既定 / mailapp = 従来方式に切り戻す）');
+    sheet.getRange(CONFIG.SETTINGS_METHOD_CELL).setValue('gmail_api');
   }
   return sheet;
 }
@@ -154,6 +159,8 @@ function buildTrackingUrl(token) {
 
 var SENDER_ALIAS = 'tasone.clients@gmail.com';
 var SENDER_NAME = '株式会社タスワンカンパニー';
+// From: ヘッダーの表示名も日本語なのでMIMEエンコードが必要
+var SENDER_NAME_ENCODED = '=?UTF-8?B?' + Utilities.base64Encode(SENDER_NAME, Utilities.Charset.UTF_8) + '?=';
 
 /**
  * MailApp/GmailAppの失敗をメールに頼らず確認するための診断ログ。
@@ -174,6 +181,119 @@ function logSendError(context, err) {
 }
 
 /**
+ * 送信方式を「設定」シートB3から読む。
+ * 空欄/'gmail_api' → Gmail REST API（既定）、'mailapp' → 従来のMailApp。
+ * 再デプロイなしで切り戻せるようにするための仕組み。
+ */
+function getSendMethod() {
+  var sheet = getSettingsSheet();
+  var v = normalize(sheet.getRange(CONFIG.SETTINGS_METHOD_CELL).getValue()).toLowerCase();
+  return v === 'mailapp' ? 'mailapp' : 'gmail_api';
+}
+
+/**
+ * 文字列をbase64url（+→-, /→_, 末尾の=除去）に変換する。
+ * Gmail APIのraw形式が要求する形。
+ */
+function toBase64Url(bytes) {
+  return Utilities.base64Encode(bytes)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+/**
+ * 日本語の件名をMIME encoded-word形式にする。
+ * これをしないと受信側で文字化けする。
+ */
+function encodeSubject(subject) {
+  return '=?UTF-8?B?' + Utilities.base64Encode(subject, Utilities.Charset.UTF_8) + '?=';
+}
+
+/**
+ * Gmail REST APIで直接送信する。UrlFetchApp経由なので、
+ * 枯渇したApps ScriptのMailApp送信枠を消費しない。
+ * 成功なら true、失敗なら false（例外は投げない）。
+ */
+function sendViaGmailApi(to, subject, body) {
+  try {
+    var raw =
+      'From: ' + SENDER_NAME_ENCODED + ' <' + SENDER_ALIAS + '>\r\n' +
+      'To: ' + to + '\r\n' +
+      'Subject: ' + encodeSubject(subject) + '\r\n' +
+      'MIME-Version: 1.0\r\n' +
+      'Content-Type: text/plain; charset="UTF-8"\r\n' +
+      'Content-Transfer-Encoding: base64\r\n' +
+      '\r\n' +
+      Utilities.base64Encode(body, Utilities.Charset.UTF_8);
+
+    var res = UrlFetchApp.fetch(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+      {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+        payload: JSON.stringify({ raw: toBase64Url(Utilities.newBlob(raw).getBytes()) }),
+        muteHttpExceptions: true
+      }
+    );
+
+    var code = res.getResponseCode();
+    if (code >= 200 && code < 300) return true;
+
+    // Gmail APIは例外ではなくHTTPステータスで失敗を返すため、明示的に判定する
+    logSendError('sendViaGmailApi(' + to + ') HTTP ' + code, res.getContentText());
+    return false;
+  } catch (err) {
+    logSendError('sendViaGmailApi(' + to + ')', err);
+    return false;
+  }
+}
+
+/**
+ * Apps Scriptの拡張サービス(Advanced Service)経由でGmail APIを呼ぶ。
+ * UrlFetchApp版と同じくMailApp送信枠を消費しないが、
+ * HTTPを手組みしない分こちらのほうが素直。Gmail拡張サービスが
+ * 有効になっていない環境では Gmail が未定義になるため、その場合はfalseを返す。
+ */
+function sendViaGmailAdvanced(to, subject, body) {
+  try {
+    if (typeof Gmail === 'undefined') {
+      logSendError('sendViaGmailAdvanced', 'Gmail拡張サービスが有効になっていません');
+      return false;
+    }
+    var raw =
+      'From: ' + SENDER_NAME_ENCODED + ' <' + SENDER_ALIAS + '>\r\n' +
+      'To: ' + to + '\r\n' +
+      'Subject: ' + encodeSubject(subject) + '\r\n' +
+      'MIME-Version: 1.0\r\n' +
+      'Content-Type: text/plain; charset="UTF-8"\r\n' +
+      'Content-Transfer-Encoding: base64\r\n' +
+      '\r\n' +
+      Utilities.base64Encode(body, Utilities.Charset.UTF_8);
+
+    Gmail.Users.Messages.send({ raw: toBase64Url(Utilities.newBlob(raw).getBytes()) }, 'me');
+    return true;
+  } catch (err) {
+    logSendError('sendViaGmailAdvanced(' + to + ')', err);
+    return false;
+  }
+}
+
+/**
+ * 従来のMailApp送信。切り戻し用に残してある（削除しないこと）。
+ */
+function sendViaMailApp(to, subject, body) {
+  try {
+    MailApp.sendEmail(to, subject, body);
+    return true;
+  } catch (err) {
+    logSendError('MailApp.sendEmail(' + to + ') 残り送信可能数=' + getRemainingQuotaSafe(), err);
+    return false;
+  }
+}
+
+/**
  * 資料メールを送る。送信できたら true、失敗したら false を返す（例外は投げない）。
  * メール送信は日次上限などで落ちうるが、それで登録処理全体を失敗させない。
  */
@@ -182,13 +302,38 @@ function sendResourceEmail(email, name, trackingUrl) {
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
-  try {
-    MailApp.sendEmail(email, subject, body);
-    return true;
-  } catch (err) {
-    logSendError('MailApp.sendEmail(' + email + ') 残り送信可能数=' + getRemainingQuotaSafe(), err);
-    return false;
+
+  if (getSendMethod() === 'mailapp') {
+    return sendViaMailApp(email, subject, body);
   }
+
+  // 既定はGmail API。REST版 → 拡張サービス版 → MailApp の順に試す（三重の保険）
+  if (sendViaGmailApi(email, subject, body)) return true;
+  if (sendViaGmailAdvanced(email, subject, body)) return true;
+  return sendViaMailApp(email, subject, body);
+}
+
+/**
+ * Gmail API送信が枯渇枠を回避できているかを、本番切り替え前に確認するための
+ * 手動実行用関数。GASエディタで実行し、自分宛に1通届けば成功。
+ */
+function testGmailApiSend() {
+  var to = Session.getEffectiveUser().getEmail();
+  var quota = getRemainingQuotaSafe();
+  var bodyOf = function(route) {
+    return 'このメールが届いていれば、' + route + '経由の送信は成功しています。\n' +
+      'MailApp残り送信可能数: ' + quota + '\n' +
+      '（この数値がマイナスや0のままでも届いていれば、枯渇枠の回避に成功しています）';
+  };
+
+  var rest = sendViaGmailApi(to, '【テスト1】Gmail API(REST)送信の確認', bodyOf('Gmail API(REST)'));
+  var adv = sendViaGmailAdvanced(to, '【テスト2】Gmail拡張サービス送信の確認', bodyOf('Gmail拡張サービス'));
+
+  var summary = 'REST版=' + (rest ? '成功' : '失敗') +
+    ' / 拡張サービス版=' + (adv ? '成功' : '失敗') +
+    ' / MailApp残り=' + quota + ' / 宛先=' + to;
+  Logger.log(summary);
+  logSendError('testGmailApiSend（エラーではありません）', summary);
 }
 
 function getRemainingQuotaSafe() {
