@@ -173,18 +173,42 @@ function logSendError(context, err) {
   }
 }
 
+/**
+ * 資料メールを送る。送信できたら true、失敗したら false を返す（例外は投げない）。
+ * メール送信は日次上限などで落ちうるが、それで登録処理全体を失敗させない。
+ */
 function sendResourceEmail(email, name, trackingUrl) {
   var subject = '【民泊経営パッケージ】資料のご案内（タスワンカンパニー）';
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
+  try {
+    MailApp.sendEmail(email, subject, body);
+    return true;
+  } catch (err) {
+    logSendError('MailApp.sendEmail(' + email + ') 残り送信可能数=' + getRemainingQuotaSafe(), err);
+    return false;
+  }
+}
 
-  // 注意: GmailApp.sendEmail(from指定あり) や、name/replyTo等のオプション付き
-  // MailApp.sendEmail は「premium email」という別枠の非常に少ない日次上限を消費し、
-  // 本番稼働中に「1日にサービス premium email を実行した回数が多すぎます」で
-  // 両方とも送信不能になる事故が実際に発生した。差出人ブランディングは諦め、
-  // 上限に余裕のあるプレーン送信のみに戻す（本番の送信継続を最優先）。
-  MailApp.sendEmail(email, subject, body);
+function getRemainingQuotaSafe() {
+  try {
+    return MailApp.getRemainingDailyQuota();
+  } catch (e) {
+    return '取得失敗';
+  }
+}
+
+/**
+ * 本日あと何通送れるかを確認するための手動実行用関数。
+ * 「エラーログ」シートにも記録するので、GASエディタのログが見られない場合でも確認できる。
+ */
+function checkMailQuota() {
+  var remaining = getRemainingQuotaSafe();
+  var who = '';
+  try { who = Session.getEffectiveUser().getEmail(); } catch (e) { who = '不明'; }
+  Logger.log('実行アカウント: ' + who + ' / 本日の残り送信可能数: ' + remaining);
+  logSendError('checkMailQuota（エラーではありません）', '実行アカウント=' + who + ' 残り送信可能数=' + remaining);
 }
 
 /**
@@ -260,7 +284,9 @@ function upsertRegistrant(name, email, phone) {
     token = Utilities.getUuid();
     sheet.appendRow([nowJst(), name, email, phone, 1, nowJst(), 0, '', token]);
   }
-  sendResourceEmail(email, name, buildTrackingUrl(token));
+  var trackingUrl = buildTrackingUrl(token);
+  var emailSent = sendResourceEmail(email, name, trackingUrl);
+  return { url: trackingUrl, emailSent: emailSent };
 }
 
 function registerNew(data) {
@@ -271,10 +297,21 @@ function registerNew(data) {
     if (!name || !email || !phone) {
       return { success: false, message: '名前・メールアドレス・電話番号をすべて入力してください。' };
     }
-    upsertRegistrant(name, email, phone);
-    return { success: true, message: 'ご入力いただいたメールアドレス宛に資料のURLをお送りしました。' };
+    var result = upsertRegistrant(name, email, phone);
+
+    // メール送信が失敗しても登録自体は完了しており、資料URLは画面から必ず渡せる。
+    // 日次送信上限などでメールが止まっても来場者を取りこぼさないための設計。
+    return {
+      success: true,
+      url: result.url,
+      emailSent: result.emailSent,
+      message: result.emailSent
+        ? 'ご登録ありがとうございます。ご入力のメールアドレスにも資料をお送りしました。'
+        : 'ご登録ありがとうございます。下のボタンから資料をご覧ください。'
+    };
   } catch (e) {
     Logger.log('[registerNew] ' + e.stack);
+    logSendError('registerNew', e);
     return { success: false, message: '送信に失敗しました。時間をおいて再度お試しください。' };
   }
 }
