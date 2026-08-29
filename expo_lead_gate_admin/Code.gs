@@ -444,15 +444,17 @@ function registerNew(data) {
     }
     var result = upsertRegistrant(name, email, phone);
 
-    // メール送信が失敗しても登録自体は完了しており、資料URLは画面から必ず渡せる。
-    // 日次送信上限などでメールが止まっても来場者を取りこぼさないための設計。
+    // 資料はメールでのみ渡す。虚偽のメールアドレスでは受け取れないようにするため、
+    // 画面上に資料URLは一切出さない。送信できなければ失敗として扱う。
+    if (!result.emailSent) {
+      return {
+        success: false,
+        message: 'メールを送信できませんでした。お手数ですがスタッフにお声がけください。'
+      };
+    }
     return {
       success: true,
-      url: result.url,
-      emailSent: result.emailSent,
-      message: result.emailSent
-        ? 'ご登録ありがとうございます。ご入力のメールアドレスにも資料をお送りしました。'
-        : 'ご登録ありがとうございます。下のボタンから資料をご覧ください。'
+      message: 'ご登録ありがとうございます。ご入力のメールアドレス宛に資料をお送りしました。'
     };
   } catch (e) {
     Logger.log('[registerNew] ' + e.stack);
