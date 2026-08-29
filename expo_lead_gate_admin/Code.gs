@@ -152,12 +152,27 @@ function buildTrackingUrl(token) {
   return ScriptApp.getService().getUrl() + '?click=' + encodeURIComponent(token);
 }
 
+var SENDER_ALIAS = 'tasone.clients@gmail.com';
+var SENDER_NAME = '株式会社タスワンカンパニー';
+
 function sendResourceEmail(email, name, trackingUrl) {
   var subject = '【民泊経営パッケージ】資料のご案内（タスワンカンパニー）';
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
-  MailApp.sendEmail(email, subject, body);
+
+  var aliases = GmailApp.getAliases();
+  if (aliases.indexOf(SENDER_ALIAS) === -1) {
+    // エイリアス未登録・未認証。差出人は変わらないが、表示名と返信先だけ整えて確実に送る。
+    Logger.log('[sendResourceEmail] ' + SENDER_ALIAS + ' はまだ送信エイリアスとして登録されていません。表示名のみで送信します。');
+    MailApp.sendEmail(email, subject, body, { name: SENDER_NAME, replyTo: SENDER_ALIAS });
+    return;
+  }
+
+  GmailApp.sendEmail(email, subject, body, {
+    from: SENDER_ALIAS,
+    name: SENDER_NAME
+  });
 }
 
 /**
@@ -167,6 +182,20 @@ function sendResourceEmail(email, name, trackingUrl) {
  */
 function authorizeMailSending() {
   MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '【認可テスト】メール送信権限の確認', 'このメールが届けば、メール送信権限の認可は完了です。');
+}
+
+/**
+ * GmailApp（差出人エイリアス切り替え用）の権限を認可するための
+ * 一回限りの手動実行用関数。GASエディタで選んで実行すると、
+ * 通常のMailAppより広い「Gmail」権限の確認ダイアログが表示される。
+ * 認可後、実行ログで tasone.clients@gmail.com が一覧に出ているか確認できる。
+ */
+function authorizeGmailSending() {
+  var aliases = GmailApp.getAliases();
+  Logger.log('登録済み送信エイリアス一覧: ' + JSON.stringify(aliases));
+  if (aliases.indexOf(SENDER_ALIAS) === -1) {
+    Logger.log('※ ' + SENDER_ALIAS + ' がまだ一覧に無い場合、Gmail側の「送信元アドレスの追加」で確認コードの認証が完了していない可能性があります。');
+  }
 }
 
 /**
