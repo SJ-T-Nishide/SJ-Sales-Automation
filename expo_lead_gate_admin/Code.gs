@@ -153,7 +153,7 @@ function buildTrackingUrl(token) {
 }
 
 function sendResourceEmail(email, name, trackingUrl) {
-  var subject = '【Success Japan】資料のご案内';
+  var subject = '【民泊経営パッケージ】資料のご案内（タスワンカンパニー）';
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
