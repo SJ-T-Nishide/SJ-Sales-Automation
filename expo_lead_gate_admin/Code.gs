@@ -155,24 +155,51 @@ function buildTrackingUrl(token) {
 var SENDER_ALIAS = 'tasone.clients@gmail.com';
 var SENDER_NAME = '株式会社タスワンカンパニー';
 
+/**
+ * MailApp/GmailAppの失敗をメールに頼らず確認するための診断ログ。
+ * 「エラーログ」シートに日時・発生箇所・内容を追記する。
+ */
+function logSendError(context, err) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('エラーログ');
+    if (!sheet) {
+      sheet = ss.insertSheet('エラーログ');
+      sheet.getRange(1, 1, 1, 3).setValues([['日時', '発生箇所', '内容']]);
+    }
+    sheet.appendRow([nowJst(), context, String((err && err.stack) || err)]);
+  } catch (e2) {
+    // ログ書き込み自体が失敗した場合は諦める
+  }
+}
+
 function sendResourceEmail(email, name, trackingUrl) {
   var subject = '【民泊経営パッケージ】資料のご案内（タスワンカンパニー）';
   var body = getBodyTemplate()
     .replace(/\{name\}/g, name)
     .replace(/\{url\}/g, trackingUrl);
 
-  var aliases = GmailApp.getAliases();
-  if (aliases.indexOf(SENDER_ALIAS) === -1) {
-    // エイリアス未登録・未認証。差出人は変わらないが、表示名と返信先だけ整えて確実に送る。
-    Logger.log('[sendResourceEmail] ' + SENDER_ALIAS + ' はまだ送信エイリアスとして登録されていません。表示名のみで送信します。');
-    MailApp.sendEmail(email, subject, body, { name: SENDER_NAME, replyTo: SENDER_ALIAS });
-    return;
+  var aliases = [];
+  try {
+    aliases = GmailApp.getAliases();
+  } catch (err) {
+    logSendError('GmailApp.getAliases', err);
   }
 
-  GmailApp.sendEmail(email, subject, body, {
-    from: SENDER_ALIAS,
-    name: SENDER_NAME
-  });
+  if (aliases.indexOf(SENDER_ALIAS) !== -1) {
+    try {
+      GmailApp.sendEmail(email, subject, body, {
+        from: SENDER_ALIAS,
+        name: SENDER_NAME
+      });
+      return;
+    } catch (err) {
+      logSendError('GmailApp.sendEmail(' + email + ')', err);
+      // 失敗した場合は下のMailAppへフォールバックする
+    }
+  }
+
+  MailApp.sendEmail(email, subject, body, { name: SENDER_NAME, replyTo: SENDER_ALIAS });
 }
 
 /**
